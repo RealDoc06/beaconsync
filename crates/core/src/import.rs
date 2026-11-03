@@ -372,6 +372,7 @@ pub async fn import_prism_zip(file: &Path, root: &Path, author: &str) -> Result<
             crate::store::write_atomic(&dir.join(rel), &bytes)?;
         }
     }
+    instance::make_portable(&dir)?;
     adopt(&dir, author).await
 }
 

@@ -266,7 +266,8 @@ pub fn systemd_unit(cfg: &ServerConfig, beacon: &Path, dir: &Path, user: &str) -
 
 pub fn service_name(cfg: &ServerConfig) -> String {
     let slug: String = cfg.name.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
-    format!("beacon-{}", slug.trim_matches('-'))
+    let slug: Vec<&str> = slug.split('-').filter(|p| !p.is_empty()).collect();
+    format!("beacon-{}", slug.join("-"))
 }
 
 /// Installs or updates Minecraft + loader when the tree asks for a different one.

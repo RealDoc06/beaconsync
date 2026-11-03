@@ -139,6 +139,23 @@ pub fn set_name(instance: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// `instance.cfg` keys that only make sense on the machine that wrote them.
+const MACHINE_KEYS: &[&str] =
+    &["JavaPath", "OverrideJavaLocation", "JavaSignature", "JavaVersion", "JavaArchitecture", "JavaRealArchitecture", "JavaVendor", "shortcuts", "uuid"];
+
+/// Drops machine specific settings (Java path, shortcuts, ids) from an instance copied from
+/// another computer, so Prism picks a local Java on first launch.
+pub fn make_portable(instance: &Path) -> Result<()> {
+    let path = instance.join("instance.cfg");
+    let text = fs::read_to_string(&path)?;
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| l.split_once('=').is_none_or(|(k, _)| !MACHINE_KEYS.contains(&k.trim())))
+        .collect();
+    fs::write(path, kept.join("\n") + "\n")?;
+    Ok(())
+}
+
 /// Turns a display name into a safe, unique folder name inside `root`.
 pub fn unique_dir(root: &Path, name: &str) -> PathBuf {
     let slug: String = name
