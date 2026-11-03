@@ -82,7 +82,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
+          package_json_file: apps/desktop/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 22
