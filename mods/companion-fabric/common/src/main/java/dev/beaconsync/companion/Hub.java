@@ -1,7 +1,5 @@
 package dev.beaconsync.companion;
 
-import net.fabricmc.loader.api.FabricLoader;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -17,19 +15,17 @@ import java.time.Duration;
 
 /** Minimal client for the hub's public API. All calls block; run them off the render thread. */
 final class Hub {
-    private static final String USER_AGENT = "BeaconSync-Companion/" + FabricLoader.getInstance()
-            .getModContainer("beaconsync-companion")
-            .map(mod -> mod.getMetadata().getVersion().getFriendlyString())
-            .orElse("dev");
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
     private final String base;
+    private final String userAgent;
 
-    Hub(String hubUrl) {
+    Hub(String hubUrl, String userAgent) {
         this.base = hubUrl.replaceAll("/+$", "");
+        this.userAgent = userAgent;
     }
 
     Model.Pack pack(String code) throws IOException {
@@ -50,21 +46,21 @@ final class Hub {
     }
 
     /** Streams {@code url} into {@code file} and returns the SHA-512 of what was written. */
-    static String download(String url, Path file) throws IOException {
+    String download(String url, Path file) throws IOException {
         HttpResponse<InputStream> res = send(url, Duration.ofMinutes(5), HttpResponse.BodyHandlers.ofInputStream());
         try (InputStream in = res.body(); OutputStream out = Files.newOutputStream(file)) {
             return Repo.sha512(in, out);
         }
     }
 
-    private static byte[] get(String url, Duration timeout) throws IOException {
+    private byte[] get(String url, Duration timeout) throws IOException {
         return send(url, timeout, HttpResponse.BodyHandlers.ofByteArray()).body();
     }
 
-    private static <T> HttpResponse<T> send(String url, Duration timeout, HttpResponse.BodyHandler<T> handler) throws IOException {
+    private <T> HttpResponse<T> send(String url, Duration timeout, HttpResponse.BodyHandler<T> handler) throws IOException {
         HttpRequest req = HttpRequest.newBuilder(URI.create(url))
                 .timeout(timeout)
-                .header("User-Agent", USER_AGENT)
+                .header("User-Agent", userAgent)
                 .GET()
                 .build();
         HttpResponse<T> res;

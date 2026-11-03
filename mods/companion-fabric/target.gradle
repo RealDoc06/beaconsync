@@ -1,0 +1,33 @@
+// Shared setup for every v* target, applied at the end of its build.gradle once Loom is in place.
+// Expects minecraft_version, minecraft_range, loader_range and java_version in the target's gradle.properties.
+
+version = "${mod_version}+${minecraft_version}"
+group = 'dev.beaconsync'
+base { archivesName = 'beaconsync-companion' }
+
+def common = project(':common')
+
+dependencies {
+    implementation common
+}
+
+// The common classes ship inside the mod jar.
+tasks.named('jar') { from common.sourceSets.main.output }
+
+// Both release jars land in the root build/libs. With remapping that is remapJar, otherwise jar itself.
+tasks.named(tasks.names.contains('remapJar') ? 'remapJar' : 'jar') {
+    destinationDirectory = rootProject.layout.buildDirectory.dir('libs')
+}
+
+processResources {
+    def props = [
+            version        : project.version,
+            minecraft_range: project.minecraft_range,
+            loader_range   : project.loader_range,
+            java_version   : project.java_version,
+    ]
+    inputs.properties props
+    from(rootProject.file('common/fabric.mod.json')) { expand props }
+}
+
+tasks.withType(JavaCompile).configureEach { options.release = project.java_version as int }

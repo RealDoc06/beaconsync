@@ -1,0 +1,14 @@
+plugins { id 'net.fabricmc.fabric-loom-remap' }
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    // Mojang names, same as the unobfuscated 26.x target.
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    // Only the Fabric API modules we use, so the build remaps as little as possible.
+    ['fabric-api-base', 'fabric-command-api-v2', 'fabric-lifecycle-events-v1', 'fabric-networking-api-v1'].each {
+        modImplementation fabricApi.module(it, project.fabric_api_version)
+    }
+}
+
+apply from: rootProject.file('target.gradle')

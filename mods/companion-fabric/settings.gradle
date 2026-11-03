@@ -6,3 +6,6 @@ pluginManagement {
 }
 
 rootProject.name = 'beaconsync-companion'
+
+// common: version-independent logic + tests. v*: one thin Minecraft layer per target version.
+include 'common', 'v1_21_1', 'v26_3'

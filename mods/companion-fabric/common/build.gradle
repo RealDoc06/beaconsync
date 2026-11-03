@@ -1,0 +1,19 @@
+// Plain Java, no Minecraft: compiled once and packed into every target's jar.
+plugins { id 'java-library' }
+
+repositories { mavenCentral() }
+
+dependencies {
+    // Shipped by Minecraft at runtime. Pinned to what 1.21.1 bundles, the oldest target.
+    ['com.google.code.gson:gson:2.11.0', 'org.slf4j:slf4j-api:2.0.9'].each {
+        compileOnly it
+        testImplementation it
+    }
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Lowest Java any target runs on.
+tasks.withType(JavaCompile).configureEach { options.release = 21 }
+
+test { useJUnitPlatform() }

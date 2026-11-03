@@ -23,6 +23,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
 rand = "0.8"
 
+# Keep debug builds small: line tables for our code, no debug info for dependencies.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

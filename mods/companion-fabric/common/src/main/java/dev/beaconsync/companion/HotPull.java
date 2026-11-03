@@ -154,7 +154,7 @@ final class HotPull {
             }
             if (!entry.hash().equals(hash)) {
                 String url = entry.source() != null && entry.source().url() != null ? entry.source().url() : hub.objectUrl(entry.hash());
-                hash = Hub.download(url, tmp);
+                hash = hub.download(url, tmp);
             }
             if (!entry.hash().equals(hash)) throw new IOException("SHA-512 mismatch");
             // A running game keeps its jars open; move the old one aside instead of overwriting it.

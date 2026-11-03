@@ -111,7 +111,7 @@ pub struct LogEntry {
 pub const DEFAULT_IGNORE: &[&str] = &[
     "saves/", "logs/", "crash-reports/", "screenshots/", "backups/", ".cache/", "cache/", "natives/",
     ".fabric/", ".mixin.out/", "debug/", "downloads/", "journeymap/data/", "XaeroWorldMap/",
-    "XaeroWaypoints/", "server-resource-packs/", "local/", ".beacon/", "usercache.json",
+    "XaeroWaypoints/", "xaero/", "frozenlib/", ".packignore", "server-resource-packs/", "local/", ".beacon/", "usercache.json",
     "usernamecache.json", "servers.dat", "servers.dat_old", "options.txt", "optionsof.txt",
     "optionsshaders.txt", "realms_persistence.json", "command_history.txt", "hotbar.nbt", "*.log",
     "*.log.gz", "*.tmp", "*.part", "*.beacon-old", ".DS_Store", "Thumbs.db", "mods/.index/",

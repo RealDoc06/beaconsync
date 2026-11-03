@@ -26,6 +26,23 @@ jobs:
       - run: cargo test -p beacon-core -p beacon-hub -p beacon-cli
       - run: cargo clippy --workspace -- -D warnings
 
+  # The desktop app and CLI must build on every platform we ship.
+  cross-platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Frontend placeholder for tauri::generate_context
+        shell: bash
+        run: mkdir -p apps/desktop/dist && touch apps/desktop/dist/index.html
+      - run: cargo test -p beacon-core -p beacon-cli
+      - run: cargo build -p beaconsync-desktop -p beacon-hub
+
   desktop-web:
     runs-on: ubuntu-latest
     defaults:

@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Local scripting hook for demos/UI tests (see src/automation.rs). Off in shipped builds.
+automation = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

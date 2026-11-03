@@ -155,12 +155,33 @@ async fn fetch_tree(hub: &Hub, store: &ObjectStore, commit: &str) -> Result<Tree
     store.get_json(&c.tree)
 }
 
-/// Copies this executable next to the server so services and containers run a stable path.
-fn install_self(dir: &Path) -> Result<PathBuf> {
-    let dest = dir.join(".beacon/bin/beacon");
+/// Puts a `beacon` binary next to the server so services and containers run a stable path.
+/// Containers always run Linux, so docker mode uses the static Linux build: `BEACON_LINUX_BINARY`
+/// if set, else the latest release, else (on Linux) this executable.
+async fn install_self(dir: &Path, mode: ServerMode) -> Result<PathBuf> {
+    let name = if cfg!(windows) && mode != ServerMode::Docker { "beacon.exe" } else { "beacon" };
+    let dest = dir.join(".beacon/bin").join(name);
     fs::create_dir_all(dest.parent().context("no parent")?)?;
     let me = std::env::current_exe()?;
-    if me != dest {
+    if mode == ServerMode::Docker {
+        if let Some(local) = std::env::var_os("BEACON_LINUX_BINARY") {
+            fs::copy(local, &dest)?;
+        } else {
+            let url = format!(
+                "{}/beacon-{}-unknown-linux-musl",
+                beacon_core::companion::RELEASES,
+                std::env::consts::ARCH
+            );
+            match beacon_core::http().get(&url).send().await.and_then(|r| r.error_for_status()) {
+                Ok(resp) => fs::write(&dest, resp.bytes().await?)?,
+                Err(_) if cfg!(target_os = "linux") => {
+                    ui::warn("could not download the static Linux build, using this binary in the container");
+                    fs::copy(&me, &dest)?;
+                }
+                Err(e) => bail!("could not download the Linux build of beacon for the container: {e}"),
+            }
+        }
+    } else if me != dest {
         fs::copy(&me, &dest)?;
     }
     #[cfg(unix)]
@@ -267,7 +288,7 @@ async fn install(a: InstallArgs) -> Result<()> {
     srv::apply_tree(&dir, &tree, &fetcher, &|p| bar.update(p)).await?;
     bar.done();
     srv::accept_eula(&dir)?;
-    let beacon = install_self(&dir)?;
+    let beacon = install_self(&dir, mode).await?;
     if mode != ServerMode::Docker {
         let bar = Bar::new();
         srv::ensure_loader(&dir, &mut cfg, &tree, &|p| bar.update(p)).await?;
@@ -284,7 +305,8 @@ async fn install(a: InstallArgs) -> Result<()> {
     match mode {
         ServerMode::Plain => {
             println!();
-            println!("  Start it:      cd {} && ./start.sh", dir.display());
+            let script = if cfg!(windows) { "start.bat" } else { "./start.sh" };
+            println!("  Start it:      cd {} && {script}", dir.display());
             println!("  Auto updates:  {} server run {}", beacon.display(), dir.display());
         }
         ServerMode::Service => setup_service(&cfg, &beacon, &dir, a.no_start)?,

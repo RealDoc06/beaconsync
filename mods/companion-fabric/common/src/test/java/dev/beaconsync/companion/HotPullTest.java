@@ -37,7 +37,7 @@ class HotPullTest {
             ex.close();
         });
         server.start();
-        hub = new Hub("http://127.0.0.1:" + server.getAddress().getPort() + "/");
+        hub = new Hub("http://127.0.0.1:" + server.getAddress().getPort() + "/", "BeaconSync-Test");
         game = Files.createDirectories(instance.resolve("minecraft"));
         beacon = Files.createDirectories(instance.resolve(".beacon"));
         Files.writeString(beacon.resolve("config.json"), "{}");

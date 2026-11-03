@@ -1,36 +1,6 @@
 plugins {
-    id 'fabric-loom' version "${loom_version}"
+    id 'base'
+    // One Loom for both targets: the remap variant for obfuscated 1.21.1, the plain one for unobfuscated 26.x.
+    id 'net.fabricmc.fabric-loom' version "${loom_version}" apply false
+    id 'net.fabricmc.fabric-loom-remap' version "${loom_version}" apply false
 }
-
-version = project.mod_version
-group = 'dev.beaconsync'
-base { archivesName = 'beaconsync-companion' }
-
-dependencies {
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    // Mojang names match the unobfuscated 26.x releases, which keeps a future port mechanical.
-    mappings loom.officialMojangMappings()
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-
-    // Only the Fabric API modules we use, so the build remaps as little as possible.
-    ['fabric-api-base', 'fabric-command-api-v2', 'fabric-lifecycle-events-v1', 'fabric-networking-api-v1'].each {
-        modImplementation fabricApi.module(it, project.fabric_api_version)
-    }
-
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-}
-
-test { useJUnitPlatform() }
-
-processResources {
-    inputs.property 'version', project.version
-    filesMatching('fabric.mod.json') { expand version: project.version }
-}
-
-java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-}
-
-tasks.withType(JavaCompile).configureEach { it.options.release = 21 }

@@ -5,6 +5,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(feature = "automation")]
+mod automation;
 mod hub;
 mod library;
 mod pack;
@@ -12,6 +14,11 @@ mod util;
 
 fn main() {
     tauri::Builder::default()
+        .setup(|_app| {
+            #[cfg(feature = "automation")]
+            automation::start(_app.handle().clone());
+            Ok(())
+        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
