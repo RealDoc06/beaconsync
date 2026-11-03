@@ -12,21 +12,36 @@ Client-only Fabric mod for BeaconSync instances. Idle unless `<instance>/.beacon
 
 All network and disk work runs on a background thread. Failures are logged and shown in chat, never thrown.
 
-## Versions
+## Targets
 
-| | |
-| --- | --- |
-| Minecraft | 1.21 to 1.21.1 |
-| Fabric Loader | 0.15+ (built against 0.16.14) |
-| Fabric API | command-api-v2, lifecycle-events-v1, networking-api-v1 |
-| Java | 21 |
+| | 1.21.1 jar | 26.3 jar |
+| --- | --- | --- |
+| Minecraft | 1.21 to 1.21.1 | 26.3.x |
+| Fabric Loader | 0.15+ (built against 0.16.14) | 0.19.3+ (built against 0.20.1) |
+| Fabric API | 0.116.17+1.21.1 | 0.161.0+26.3 |
+| Java | 21 | 25 |
 
-Built with Fabric Loom 1.17.2 (newest Loom that runs on JDK 21) and Mojang mappings, so a 26.x port keeps the same names.
+Needs Fabric API's command-api-v2, lifecycle-events-v1 and networking-api-v1 modules.
+
+## Layout
+
+- `common/`: everything that does not touch Minecraft (`Companion` flow, `HotPull`, `Hub`, `Repo`, `Model`, `Chat`) plus the JUnit tests. Plain Java, compiled once for release 21 and packed into both jars. `fabric.mod.json` lives here too, templated per target.
+- `v1_21_1/`, `v26_3/`: one `BeaconCompanion` each, the Minecraft-facing layer (Fabric events, client commands, chat rendering, toasts, resource reload). Versions in each target's `gradle.properties`.
+- `target.gradle`: shared setup applied by every target.
+
+One Loom (1.19.3) drives both: `fabric-loom-remap` with Mojang mappings for obfuscated 1.21.1, plain `fabric-loom` for unobfuscated 26.x. Loom 1.18+ runs on JDK 25 only, so Gradle runs on 25 (`gradle/gradle-daemon-jvm.properties` picks an installed JDK 25 even when `JAVA_HOME` is older). The 1.21.1 target still compiles with `--release 21`.
+
+Adding a version: copy a `v*` folder, bump its `gradle.properties`, fix the API spots in `BeaconCompanion`, add it to `settings.gradle`.
 
 ## Build
 
+Needs a JDK 25 that Gradle can find (`JAVA_HOME`, a standard JDK location, or `org.gradle.java.installations.paths` in `~/.gradle/gradle.properties`).
+
 ```sh
-./gradlew build      # -> build/libs/beaconsync-companion-<version>.jar, runs tests
+./gradlew build      # builds both jars into build/libs/ and runs the tests
 ```
 
-Drop the jar in the instance's `minecraft/mods/` together with Fabric API.
+- `build/libs/beaconsync-companion-<version>+1.21.1.jar`
+- `build/libs/beaconsync-companion-<version>+26.3.jar`
+
+Drop the matching jar in the instance's `minecraft/mods/` together with Fabric API.

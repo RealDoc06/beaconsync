@@ -268,3 +268,10 @@ pub async fn pull_upstream(repo: &Repo, on: OnProgress<'_>) -> Result<MergeResul
         }
     }
 }
+
+/// Address of an online server running this pack, so "Play" can drop players straight in.
+pub async fn server_address(repo: &Repo) -> Option<String> {
+    let remote = repo.config().ok()?.remote?;
+    let info = Hub::new(&remote.hub, None).public_pack(&remote.code).await.ok()?;
+    info.servers.into_iter().find(|s| s.online).map(|s| s.address)
+}

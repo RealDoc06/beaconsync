@@ -190,7 +190,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Deploy { release, servers } => pack::deploy(&dir, release, servers).await,
         Cmd::Update => pack::update(&dir).await,
         Cmd::Export { kind, out } => pack::export(&dir, kind, &out).await,
-        Cmd::Play => pack::play(&dir),
+        Cmd::Play => pack::play(&dir).await,
         Cmd::Server { cmd } => server::run(cmd, cli.dir).await,
     }
 }

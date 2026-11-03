@@ -5,14 +5,12 @@ version = "${mod_version}+${minecraft_version}"
 group = 'dev.beaconsync'
 base { archivesName = 'beaconsync-companion' }
 
-def common = project(':common')
-
 dependencies {
-    implementation common
+    implementation project(':common')
 }
 
 // The common classes ship inside the mod jar.
-tasks.named('jar') { from common.sourceSets.main.output }
+tasks.named('jar') { from project(':common').sourceSets.main.output }
 
 // Both release jars land in the root build/libs. With remapping that is remapJar, otherwise jar itself.
 tasks.named(tasks.names.contains('remapJar') ? 'remapJar' : 'jar') {

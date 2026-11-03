@@ -328,7 +328,11 @@ pub async fn update_subscribed(app: AppHandle, path: String) -> Res<UpdateInfo> 
 
 #[tauri::command]
 pub async fn launch(path: String) -> Res<()> {
-    Ok(instance::launch(Path::new(&path), Settings::load().prism_path.as_deref())?)
+    let server = match open(&path) {
+        Ok(repo) => beacon_core::ops::server_address(&repo).await,
+        Err(_) => None,
+    };
+    Ok(instance::launch(Path::new(&path), Settings::load().prism_path.as_deref(), server.as_deref())?)
 }
 
 #[tauri::command]

@@ -424,9 +424,10 @@ pub async fn export(dir: &Path, kind: ExportKind, out: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn play(dir: &Path) -> Result<()> {
+pub async fn play(dir: &Path) -> Result<()> {
     let repo = find(dir)?;
-    instance::launch(&repo.root, Settings::load().prism_path.as_deref())?;
+    let server = ops::server_address(&repo).await;
+    instance::launch(&repo.root, Settings::load().prism_path.as_deref(), server.as_deref())?;
     ui::ok("Launching with Prism Launcher");
     Ok(())
 }

@@ -233,14 +233,19 @@ pub fn prism_command(override_path: Option<&Path>) -> Option<Command> {
     })
 }
 
-/// Launches an instance through Prism (Prism handles accounts, Java and game files).
-pub fn launch(instance: &Path, prism_override: Option<&Path>) -> Result<()> {
+/// Launches an instance through Prism (Prism handles accounts, Java and game files),
+/// optionally joining a server (`host:port`) once the game is up.
+pub fn launch(instance: &Path, prism_override: Option<&Path>, server: Option<&str>) -> Result<()> {
     let id = instance.file_name().context("bad instance path")?;
     let in_prism = prism_instances_dir().is_some_and(|d| instance.parent() == Some(d.as_path()));
     let mut cmd = prism_command(prism_override).context("Prism Launcher was not found. Install it from prismlauncher.org")?;
     if !in_prism {
         bail!("This instance is outside Prism's instance folder. Move it there or set the instance folder in Settings.");
     }
-    cmd.arg("--launch").arg(id).spawn().context("starting Prism Launcher")?;
+    cmd.arg("--launch").arg(id);
+    if let Some(s) = server {
+        cmd.arg("--server").arg(s);
+    }
+    cmd.spawn().context("starting Prism Launcher")?;
     Ok(())
 }
