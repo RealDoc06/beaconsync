@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create draft release
+        run: gh release create "${GITHUB_REF_NAME}" --draft --title "BeaconSync ${GITHUB_REF_NAME}" --notes "Alpha build. See README for setup." || true
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  cli-and-hub:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl, zig: true }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl, zig: true }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Frontend placeholder for the workspace
+        shell: bash
+        run: mkdir -p apps/desktop/dist && touch apps/desktop/dist/index.html
+      - name: Build (static musl via zig)
+        if: matrix.zig
+        run: |
+          pip install ziglang
+          cargo install cargo-zigbuild --locked
+          cargo zigbuild --release --target ${{ matrix.target }} -p beacon-cli -p beacon-hub
+      - name: Build
+        if: ${{ !matrix.zig }}
+        run: cargo build --release --target ${{ matrix.target }} -p beacon-cli -p beacon-hub
+      - name: Package
+        shell: bash
+        run: |
+          ext=""; [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
+          mkdir -p out
+          cp target/${{ matrix.target }}/release/beacon$ext out/beacon-${{ matrix.target }}$ext
+          cp target/${{ matrix.target }}/release/beacon-hub$ext out/beacon-hub-${{ matrix.target }}$ext
+          gh release upload "${GITHUB_REF_NAME}" out/* --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  desktop:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, args: "--target universal-apple-darwin" }
+          - { os: windows-latest, args: "" }
+          - { os: ubuntu-22.04, args: "" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux deps
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ startsWith(matrix.os, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+  companion-mod:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew build
+        working-directory: mods/companion-fabric
+      - name: Upload (versioned + stable name used by the app)
+        run: |
+          jar=$(ls mods/companion-fabric/build/libs/beaconsync-companion-*.jar | grep -v sources | head -1)
+          cp "$jar" beaconsync-companion-1.21.1.jar
+          gh release upload "${GITHUB_REF_NAME}" "$jar" beaconsync-companion-1.21.1.jar --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

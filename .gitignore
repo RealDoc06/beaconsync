@@ -1,0 +1,9 @@
+target/
+node_modules/
+dist/
+.DS_Store
+*.log
+mods/companion-fabric/build/
+mods/companion-fabric/.gradle/
+mods/companion-fabric/run/
+hub-data/

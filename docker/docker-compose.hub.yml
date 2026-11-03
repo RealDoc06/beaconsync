@@ -1,0 +1,19 @@
+# Self-host the BeaconSync hub:
+#   BEACON_HUB_PUBLIC_URL=https://hub.example.com docker compose -f docker/docker-compose.hub.yml up -d
+# Put it behind a TLS reverse proxy (Caddy, Traefik, nginx) for anything public.
+services:
+  hub:
+    build:
+      context: ..
+      dockerfile: docker/hub.Dockerfile
+    image: beacon-hub
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      BEACON_HUB_PUBLIC_URL: ${BEACON_HUB_PUBLIC_URL:-http://localhost:8787}
+      BEACON_HUB_OPEN_REGISTRATION: ${BEACON_HUB_OPEN_REGISTRATION:-true}
+    volumes:
+      - hub-data:/data
+volumes:
+  hub-data:

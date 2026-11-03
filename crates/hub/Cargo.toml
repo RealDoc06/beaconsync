@@ -1,0 +1,27 @@
+[package]
+name = "beacon-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Self-hosted BeaconSync hub: accounts, pack storage, releases and server deployments"
+
+[dependencies]
+beacon-core.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+sha2.workspace = true
+hex.workspace = true
+rand.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+axum = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+argon2 = "0.5"
+clap = { version = "4", features = ["derive", "env"] }
+tower-http = { version = "0.6", features = ["trace"] }
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile = "3"

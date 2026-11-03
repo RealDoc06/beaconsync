@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "beaconsync-companion",
+  "version": "${version}",
+  "name": "BeaconSync Companion",
+  "description": "In-game BeaconSync update notifications, server version checks and hot pull.",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.beaconsync.companion.BeaconCompanion"]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": ">=1.21 <=1.21.1",
+    "java": ">=21",
+    "fabric-command-api-v2": "*",
+    "fabric-lifecycle-events-v1": "*",
+    "fabric-networking-api-v1": "*"
+  }
+}

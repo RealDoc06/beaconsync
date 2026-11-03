@@ -1,0 +1,6 @@
+target
+**/node_modules
+**/dist
+mods/companion-fabric/build
+mods/companion-fabric/.gradle
+hub-data
