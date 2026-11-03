@@ -108,14 +108,16 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 25
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew build
         working-directory: mods/companion-fabric
       - name: Upload (versioned + stable name used by the app)
         run: |
-          jar=$(ls mods/companion-fabric/build/libs/beaconsync-companion-*.jar | grep -v sources | head -1)
-          cp "$jar" beaconsync-companion-1.21.1.jar
-          gh release upload "${GITHUB_REF_NAME}" "$jar" beaconsync-companion-1.21.1.jar --clobber
+          for mc in 1.21.1 26.3; do
+            jar=$(ls mods/companion-fabric/build/libs/beaconsync-companion-*+$mc.jar | head -1)
+            cp "$jar" beaconsync-companion-$mc.jar
+            gh release upload "${GITHUB_REF_NAME}" "$jar" beaconsync-companion-$mc.jar --clobber
+          done
         env:
           GH_TOKEN: ${{ github.token }}

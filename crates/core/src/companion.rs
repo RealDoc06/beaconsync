@@ -6,7 +6,7 @@ use crate::{model::LoaderKind, repo::Repo};
 use anyhow::Result;
 
 /// Minecraft versions the companion mod is built for.
-pub const SUPPORTED: &[&str] = &["1.21.1"];
+pub const SUPPORTED: &[&str] = &["1.21.1", "26.3"];
 
 pub const RELEASES: &str = "https://github.com/RealDoc06/beaconsync/releases/latest/download";
 

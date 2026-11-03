@@ -41,7 +41,7 @@ game when a new version is out.
 | `crates/cli` | `beacon` CLI for servers and power users |
 | `crates/hub` | `beacon-hub`, the self-hosted sync server |
 | `crates/core` | Shared engine used by all of the above |
-| `mods/companion-fabric` | In-game companion mod (Fabric 1.21.1) |
+| `mods/companion-fabric` | In-game companion mod (Fabric 1.21.1 and 26.3) |
 
 How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -90,7 +90,7 @@ beacon export server ./server.zip
 
 ## Building
 
-Requirements: Rust (stable), Node 22 + pnpm, JDK 21 for the mod. On Linux also the
+Requirements: Rust (stable), Node 22 + pnpm, JDK 25 for the mod. On Linux also the
 [Tauri system packages](https://v2.tauri.app/start/prerequisites/).
 
 ```sh
