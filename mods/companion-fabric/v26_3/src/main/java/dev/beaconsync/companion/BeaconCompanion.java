@@ -9,7 +9,14 @@ import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.toasts.SystemToast;
+import net.minecraft.client.gui.screens.ConnectScreen;
+import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.TitleScreen;
+import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
 import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.client.multiplayer.ServerList;
+import net.minecraft.client.multiplayer.resolver.ServerAddress;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
@@ -38,7 +45,7 @@ public final class BeaconCompanion implements ClientModInitializer, Platform {
             ServerData server = client.getCurrentServer();
             companion.joined(server == null || client.isLocalServer() ? null : server.ip);
         });
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> companion.joined(null));
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> companion.left());
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registries) -> dispatcher.register(
                 ClientCommands.literal("beacon")
@@ -67,6 +74,30 @@ public final class BeaconCompanion implements ClientModInitializer, Platform {
     public void reloadResources() {
         Minecraft mc = Minecraft.getInstance();
         mc.execute(mc::reloadResourcePacks);
+    }
+
+    @Override
+    public void addServer(String name, String address) {
+        Minecraft mc = Minecraft.getInstance();
+        mc.execute(() -> {
+            ServerList list = new ServerList(mc);
+            list.load();
+            if (list.get(address) != null) return;
+            list.add(new ServerData(name, address, ServerData.Type.OTHER), false);
+            list.save();
+        });
+    }
+
+    @Override
+    public void reconnect(String name, String address) {
+        Minecraft mc = Minecraft.getInstance();
+        mc.execute(() -> {
+            Screen screen = mc.gui.screen();
+            boolean idle = screen instanceof DisconnectedScreen || screen instanceof TitleScreen || screen instanceof JoinMultiplayerScreen;
+            if (mc.level != null || !idle) return;
+            ConnectScreen.startConnecting(new JoinMultiplayerScreen(new TitleScreen()), mc, ServerAddress.parseString(address),
+                    new ServerData(name, address, ServerData.Type.OTHER), false, null);
+        });
     }
 
     private static String userAgent(FabricLoader loader) {

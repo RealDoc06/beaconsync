@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class Companion {
     private static final Logger LOG = LoggerFactory.getLogger("BeaconSync");
     private static final long CHECK_MINUTES = 5;
+    private static final long REJOIN_MINUTES = 10;
 
     private final Platform platform;
     private final String userAgent;
@@ -39,6 +40,7 @@ final class Companion {
     // Worker thread only.
     private String notifiedCommit;
     private String lastCheckError;
+    private boolean serversListed;
 
     /** Finds the instance's repo and deletes jars retired by an earlier pull. Call from mod init. */
     Companion(Platform platform, Path gameDir, String userAgent) {
@@ -65,10 +67,68 @@ final class Companion {
         worker.shutdownNow();
     }
 
-    /** World joined or left. {@code address} is the server's address, null for singleplayer or on disconnect. */
+    /** World joined. {@code address} is the server's address, null for singleplayer. */
     void joined(String address) {
         serverAddress = address;
         if (address != null && repo.isPresent()) worker.execute(this::checkServer);
+    }
+
+    /** World left. If the server went down for a deploy, follow it back up. */
+    void left() {
+        String address = serverAddress;
+        serverAddress = null;
+        if (address != null && repo.isPresent()) worker.execute(() -> rejoinAfterUpdate(address));
+    }
+
+    /**
+     * Runs after leaving a server. When the hub says that server is being updated, pulls the new
+     * version while it restarts, then joins again once it answers pings. If mods changed the game
+     * has to restart first, so the player is told instead.
+     */
+    private void rejoinAfterUpdate(String address) {
+        try {
+            refresh();
+            Model.Server server = serverAt(address);
+            if (server == null || !Boolean.TRUE.equals(server.updating())) return;
+            platform.toast(server.name() + " is updating. You will rejoin when it is back");
+            HostPort hp = HostPort.parse(address);
+            boolean modsChanged = false;
+            String pulled = null;
+            long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(REJOIN_MINUTES);
+            while (System.nanoTime() < deadline) {
+                Thread.sleep(3000);
+                if (serverAddress != null) return; // joined something else meanwhile
+                refresh();
+                server = serverAt(address);
+                if (server == null) return;
+                String target = server.target() != null ? server.target() : server.commit();
+                if (target != null && !target.equals(localCommit) && !target.equals(pulled)) {
+                    pulled = target; // once per target, even if some files failed
+                    HotPull.Result result = HotPull.run(repo.orElseThrow(), hub, target);
+                    report(target, result);
+                    modsChanged |= result.modsChanged() > 0;
+                }
+                if (Boolean.TRUE.equals(server.updating()) || hp == null || !Ping.ready(hp.host(), hp.port())) continue;
+                if (modsChanged) {
+                    platform.toast("Updated. Restart Minecraft to rejoin " + server.name());
+                } else {
+                    platform.reconnect(server.name(), address);
+                }
+                return;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            fail("rejoin failed", e);
+        }
+    }
+
+    /** Adds the pack's servers to the multiplayer list once per game session. Worker thread. */
+    private void listServers() {
+        Model.Pack p = pack;
+        if (serversListed || p == null || p.servers() == null) return;
+        serversListed = true;
+        p.servers().forEach(s -> platform.addServer(s.name(), s.address()));
     }
 
     /** Periodic: refresh hub state and announce a new release once per commit. */
@@ -76,6 +136,7 @@ final class Companion {
         try {
             refresh();
             lastCheckError = null;
+            listServers();
             Model.Pack p = pack;
             if (p == null || p.latest() == null || p.latest().commit() == null) return;
             String latest = p.latest().commit();
@@ -211,8 +272,11 @@ final class Companion {
     }
 
     private Model.Server currentServer() {
+        return serverAt(serverAddress);
+    }
+
+    private Model.Server serverAt(String address) {
         Model.Pack p = pack;
-        String address = serverAddress;
         if (p == null || p.servers() == null || address == null) return null;
         HostPort joined = HostPort.parse(address);
         if (joined == null) return null;

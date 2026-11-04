@@ -107,7 +107,7 @@ Public (no auth), used by the companion mod and by players joining with a code:
 GET /api/public/packs/:code
   -> { id, code, name, owner, description,
        latest: { id, name, commit, notes, created } | null,
-       servers: [ { name, address, commit, online } ] }
+       servers: [ { name, address, commit, online, updating, target } ] }
 GET /api/objects/:hash   -> raw object bytes (blobs, trees, commits)
 ```
 

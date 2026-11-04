@@ -10,4 +10,10 @@ interface Platform {
 
     /** Reloads resource packs on the client thread. */
     void reloadResources();
+
+    /** Adds the server to the multiplayer list unless one with that address is there. */
+    void addServer(String name, String address);
+
+    /** Joins the server, unless the player is already in a world or busy in another screen. */
+    void reconnect(String name, String address);
 }

@@ -16,7 +16,8 @@ final class Model {
 
     record Release(String id, String name, String commit, String notes) {}
 
-    record Server(String name, String address, String commit, Boolean online) {}
+    /** {@code updating} is true while a deploy to {@code target} is pending or applying. */
+    record Server(String name, String address, String commit, Boolean online, Boolean updating, String target) {}
 
     record Commit(String tree, List<String> parents, String message) {}
 
