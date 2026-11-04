@@ -11,10 +11,16 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.draft.outputs.id }}
     steps:
       - uses: actions/checkout@v4
+      # One draft per tag; its id goes to tauri-action, which can't look drafts up by tag.
       - name: Create draft release
-        run: gh release create "${GITHUB_REF_NAME}" --draft --title "BeaconSync ${GITHUB_REF_NAME}" --notes "Alpha build. See README for setup." || true
+        id: draft
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || gh release create "${GITHUB_REF_NAME}" --draft --title "BeaconSync ${GITHUB_REF_NAME}" --notes "Alpha build. See README for setup."
+          echo "id=$(gh release view "${GITHUB_REF_NAME}" --json databaseId -q .databaseId)" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -93,9 +99,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           projectPath: apps/desktop
-          tagName: ${{ github.ref_name }}
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.release.outputs.id }}
           args: ${{ matrix.args }}
 
   companion-mod:
