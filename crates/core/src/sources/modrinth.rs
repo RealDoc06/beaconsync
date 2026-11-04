@@ -137,11 +137,7 @@ impl Version {
                 side,
                 name: title.map(str::to_string),
                 version: Some(self.version_number.clone()),
-                source: Some(Source::Modrinth {
-                    project: self.project_id.clone(),
-                    version: self.id.clone(),
-                    url: f.url.clone(),
-                }),
+                source: Some(Source::Modrinth { project: self.project_id.clone(), version: self.id.clone(), url: f.url.clone() }),
             },
         ))
     }
@@ -237,8 +233,7 @@ pub async fn identify(hashes: &[String]) -> Result<HashMap<String, Entry>> {
     if hashes.is_empty() {
         return Ok(HashMap::new());
     }
-    let found: HashMap<String, Version> =
-        post("/version_files", json!({ "hashes": hashes, "algorithm": "sha512" })).await?;
+    let found: HashMap<String, Version> = post("/version_files", json!({ "hashes": hashes, "algorithm": "sha512" })).await?;
     let ids: Vec<String> = found.values().map(|v| v.project_id.clone()).collect::<HashSet<_>>().into_iter().collect();
     let projects: HashMap<String, Project> = projects(&ids).await?.into_iter().map(|p| (p.id.clone(), p)).collect();
     Ok(found

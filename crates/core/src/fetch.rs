@@ -74,9 +74,7 @@ impl Fetcher {
             .map(|(entry, dest)| {
                 let done = done.clone();
                 async move {
-                    self.fetch_to(&entry, &dest)
-                        .await
-                        .with_context(|| format!("downloading {}", dest.display()))?;
+                    self.fetch_to(&entry, &dest).await.with_context(|| format!("downloading {}", dest.display()))?;
                     let n = done.fetch_add(1, Ordering::Relaxed) + 1;
                     let label = entry
                         .name

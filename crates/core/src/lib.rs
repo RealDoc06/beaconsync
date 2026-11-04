@@ -29,11 +29,7 @@ pub mod store;
 pub use anyhow::{Error, Result};
 
 /// User agent sent to every external API (Modrinth requires a descriptive one).
-pub const USER_AGENT: &str = concat!(
-    "BeaconSync/",
-    env!("CARGO_PKG_VERSION"),
-    " (github.com/RealDoc06/beaconsync)"
-);
+pub const USER_AGENT: &str = concat!("BeaconSync/", env!("CARGO_PKG_VERSION"), " (github.com/RealDoc06/beaconsync)");
 
 /// Shared HTTP client configured with our user agent.
 pub fn http() -> reqwest::Client {
@@ -51,8 +47,5 @@ pub fn http() -> reqwest::Client {
 
 /// Current unix time in seconds.
 pub fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or_default()
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or_default()
 }

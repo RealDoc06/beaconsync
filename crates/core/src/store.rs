@@ -75,11 +75,7 @@ impl ObjectStore {
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let dir = path.parent().context("path has no parent")?;
     fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(
-        ".{}.tmp{}",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("obj"),
-        std::process::id()
-    ));
+    let tmp = dir.join(format!(".{}.tmp{}", path.file_name().and_then(|n| n.to_str()).unwrap_or("obj"), std::process::id()));
     {
         let mut f = fs::File::create(&tmp)?;
         f.write_all(bytes)?;

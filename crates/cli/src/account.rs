@@ -66,7 +66,8 @@ pub async fn packs() -> Result<()> {
         ui::info("No packs yet. Publish one from the app or with `beacon publish`.");
     }
     for p in packs {
-        let latest = p.latest.map(|r| format!("{} {}", r.name, ui::dim(ui::ago(r.created)))).unwrap_or_else(|| ui::dim("no releases"));
+        let latest =
+            p.latest.map(|r| format!("{} {}", r.name, ui::dim(ui::ago(r.created)))).unwrap_or_else(|| ui::dim("no releases"));
         let owner = if p.mine { String::new() } else { ui::dim(format!(" by {}", p.owner)) };
         println!("{}  {}{}  {} {}  {}", ui::bold(&p.code), p.name, owner, p.loader.kind.label(), p.minecraft, latest);
     }

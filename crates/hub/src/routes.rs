@@ -101,7 +101,10 @@ pub fn router(state: AppState) -> Router {
 
 fn issue_token(db: &Connection, user: &str, label: &str) -> Result<String> {
     let token = new_token();
-    db.execute("insert into tokens (hash, user_id, label, created) values (?1, ?2, ?3, ?4)", params![sha256(&token), user, label, now()])?;
+    db.execute(
+        "insert into tokens (hash, user_id, label, created) values (?1, ?2, ?3, ?4)",
+        params![sha256(&token), user, label, now()],
+    )?;
     Ok(token)
 }
 
@@ -136,7 +139,9 @@ async fn register(State(s): State<AppState>, Json(c): Json<Credentials>) -> Resu
 pub fn check_credentials(s: &AppState, c: &Credentials) -> Result<User> {
     let db = s.db();
     let row: Option<(String, String, String)> = db
-        .query_row("select id, username, pw_hash from users where username = ?1", params![c.username.trim()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .query_row("select id, username, pw_hash from users where username = ?1", params![c.username.trim()], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
         .optional()?;
     match row {
         Some((id, username, hash)) if verify_password(&c.password, &hash) => Ok(User { id, username }),
@@ -155,14 +160,19 @@ async fn device_start(State(s): State<AppState>) -> Result<Json<DeviceStart>> {
     let user_code = format!("{}-{}", new_code(4), new_code(4));
     let db = s.db();
     db.execute("delete from devices where expires < ?1", params![now()])?;
-    db.execute("insert into devices (device_code, user_code, expires) values (?1, ?2, ?3)", params![device_code, user_code, now() + 600])?;
+    db.execute(
+        "insert into devices (device_code, user_code, expires) values (?1, ?2, ?3)",
+        params![device_code, user_code, now() + 600],
+    )?;
     Ok(Json(DeviceStart { device_code, user_code, expires_in: 600 }))
 }
 
 async fn device_poll(State(s): State<AppState>, Json(p): Json<DevicePoll>) -> Result<Json<AuthResponse>> {
     let db = s.db();
     let row: Option<(Option<String>, i64)> = db
-        .query_row("select user_id, expires from devices where device_code = ?1", params![p.device_code], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row("select user_id, expires from devices where device_code = ?1", params![p.device_code], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
         .optional()?;
     let (user_id, expires) = row.ok_or_else(|| Error::bad("unknown or expired code"))?;
     if expires < now() {
@@ -201,7 +211,11 @@ async fn me(u: AuthUser) -> Json<User> {
 
 fn load_pack(db: &Connection, id: &str, viewer: Option<&str>) -> Result<Pack> {
     let mut pack = db
-        .query_row(&format!("select {PACK_COLS} from packs p join users u on u.id = p.owner_id where p.id = ?1"), params![id], |r| db::pack_row(r, viewer))
+        .query_row(
+            &format!("select {PACK_COLS} from packs p join users u on u.id = p.owner_id where p.id = ?1"),
+            params![id],
+            |r| db::pack_row(r, viewer),
+        )
         .optional()?
         .ok_or_else(|| Error::not_found("pack"))?;
     pack.latest = db::latest_release(db, id)?;
@@ -209,7 +223,9 @@ fn load_pack(db: &Connection, id: &str, viewer: Option<&str>) -> Result<Pack> {
 }
 
 fn owner_of(db: &Connection, pack: &str) -> Result<String> {
-    db.query_row("select owner_id from packs where id = ?1", params![pack], |r| r.get(0)).optional()?.ok_or_else(|| Error::not_found("pack"))
+    db.query_row("select owner_id from packs where id = ?1", params![pack], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| Error::not_found("pack"))
 }
 
 fn require_owner(db: &Connection, pack: &str, user: &AuthUser) -> Result<()> {
@@ -220,7 +236,9 @@ fn require_read(db: &Connection, pack: &str, user: &AuthUser) -> Result<()> {
     if owner_of(db, pack)? == user.id {
         return Ok(());
     }
-    let member = db.query_row("select 1 from library where user_id = ?1 and pack_id = ?2", params![user.id, pack], |_| Ok(())).optional()?;
+    let member = db
+        .query_row("select 1 from library where user_id = ?1 and pack_id = ?2", params![user.id, pack], |_| Ok(()))
+        .optional()?;
     member.ok_or_else(Error::forbidden)
 }
 
@@ -238,7 +256,10 @@ async fn library(State(s): State<AppState>, u: AuthUser) -> Result<Json<Vec<Pack
 async fn join(State(s): State<AppState>, u: AuthUser, Json(j): Json<JoinRequest>) -> Result<Json<Pack>> {
     let db = s.db();
     let code = beacon_core::hub::parse_code(&j.code);
-    let id: String = db.query_row("select id from packs where code = ?1", params![code], |r| r.get(0)).optional()?.ok_or_else(|| Error::not_found("pack"))?;
+    let id: String = db
+        .query_row("select id from packs where code = ?1", params![code], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| Error::not_found("pack"))?;
     db.execute("insert or ignore into library (user_id, pack_id, created) values (?1, ?2, ?3)", params![u.id, id, now()])?;
     Ok(Json(load_pack(&db, &id, Some(&u.id))?))
 }
@@ -273,7 +294,12 @@ async fn get_pack(State(s): State<AppState>, u: AuthUser, Path(id): Path<String>
     Ok(Json(load_pack(&db, &id, Some(&u.id))?))
 }
 
-async fn patch_pack(State(s): State<AppState>, u: AuthUser, Path(id): Path<String>, Json(p): Json<PackPatch>) -> Result<Json<Pack>> {
+async fn patch_pack(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path(id): Path<String>,
+    Json(p): Json<PackPatch>,
+) -> Result<Json<Pack>> {
     let db = s.db();
     require_owner(&db, &id, &u)?;
     if let Some(n) = p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
@@ -286,7 +312,10 @@ async fn patch_pack(State(s): State<AppState>, u: AuthUser, Path(id): Path<Strin
         db.execute("update packs set minecraft = ?1 where id = ?2", params![mc, id])?;
     }
     if let Some(l) = &p.loader {
-        db.execute("update packs set loader = ?1 where id = ?2", params![serde_json::to_string(l).map_err(anyhow::Error::from)?, id])?;
+        db.execute(
+            "update packs set loader = ?1 where id = ?2",
+            params![serde_json::to_string(l).map_err(anyhow::Error::from)?, id],
+        )?;
     }
     db.execute("update packs set updated = ?1 where id = ?2", params![now(), id])?;
     Ok(Json(load_pack(&db, &id, Some(&u.id))?))
@@ -315,7 +344,12 @@ fn is_commit(s: &AppState, id: &str) -> bool {
     s.store.get_json::<Commit>(id).is_ok()
 }
 
-async fn put_ref(State(s): State<AppState>, u: AuthUser, Path((id, branch)): Path<(String, String)>, Json(r): Json<RefUpdate>) -> Result<Json<Value>> {
+async fn put_ref(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path((id, branch)): Path<(String, String)>,
+    Json(r): Json<RefUpdate>,
+) -> Result<Json<Value>> {
     if branch.is_empty() || branch.len() > 64 || branch.contains("..") {
         return Err(Error::bad("invalid branch name"));
     }
@@ -348,7 +382,12 @@ async fn list_releases(State(s): State<AppState>, u: AuthUser, Path(id): Path<St
     Ok(Json(rows))
 }
 
-async fn create_release(State(s): State<AppState>, u: AuthUser, Path(id): Path<String>, Json(r): Json<NewRelease>) -> Result<Json<Release>> {
+async fn create_release(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path(id): Path<String>,
+    Json(r): Json<NewRelease>,
+) -> Result<Json<Release>> {
     if !is_commit(&s, &r.commit) {
         return Err(Error::bad("push the version before releasing it"));
     }
@@ -382,7 +421,12 @@ async fn list_servers(State(s): State<AppState>, u: AuthUser, Path(id): Path<Str
     Ok(Json(servers_of(&db, &id)?))
 }
 
-async fn create_server(State(s): State<AppState>, u: AuthUser, Path(id): Path<String>, Json(n): Json<NewServer>) -> Result<Json<NewServerResponse>> {
+async fn create_server(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path(id): Path<String>,
+    Json(n): Json<NewServer>,
+) -> Result<Json<NewServerResponse>> {
     let db = s.db();
     require_owner(&db, &id, &u)?;
     let sid = new_id();
@@ -403,7 +447,12 @@ async fn delete_server(State(s): State<AppState>, u: AuthUser, Path((id, sid)): 
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn deploy(State(s): State<AppState>, u: AuthUser, Path(id): Path<String>, Json(d): Json<DeployRequest>) -> Result<Json<DeployResponse>> {
+async fn deploy(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path(id): Path<String>,
+    Json(d): Json<DeployRequest>,
+) -> Result<Json<DeployResponse>> {
     let (deployment, servers) = {
         let db = s.db();
         require_owner(&db, &id, &u)?;
@@ -443,7 +492,10 @@ async fn deploy(State(s): State<AppState>, u: AuthUser, Path(id): Path<String>, 
 pub fn public_info(s: &AppState, code: &str) -> Result<PublicPack> {
     let db = s.db();
     let code = beacon_core::hub::parse_code(code);
-    let id: String = db.query_row("select id from packs where code = ?1", params![code], |r| r.get(0)).optional()?.ok_or_else(|| Error::not_found("pack"))?;
+    let id: String = db
+        .query_row("select id from packs where code = ?1", params![code], |r| r.get(0))
+        .optional()?
+        .ok_or_else(|| Error::not_found("pack"))?;
     let p = load_pack(&db, &id, None)?;
     let servers = servers_of(&db, &id)?
         .into_iter()
@@ -510,14 +562,24 @@ fn agent_state(s: &AppState, srv: &AuthServer) -> Result<(AgentPoll, bool)> {
     db.execute("update servers set last_seen = ?1 where id = ?2", params![now(), srv.id])?;
     let server = db.query_row(&format!("select {SERVER_COLS} from servers where id = ?1"), params![srv.id], db::server_row)?;
     let (deployment, failed): (Option<String>, Option<String>) =
-        db.query_row("select deployment, failed_deployment from servers where id = ?1", params![srv.id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        db.query_row("select deployment, failed_deployment from servers where id = ?1", params![srv.id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
     let code: String = db.query_row("select code from packs where id = ?1", params![srv.pack_id], |r| r.get(0))?;
     // A deployment the server failed or rolled back is not offered again; a new deploy is.
     let pending = server.target_commit.is_some() && server.target_commit != server.current_commit && deployment != failed;
     let target = match (pending, &server.target_commit, &server.target_release) {
         (true, Some(commit), Some(release)) => {
-            let release_name: String = db.query_row("select name from releases where id = ?1", params![release], |r| r.get(0)).optional()?.unwrap_or_default();
-            Some(AgentTarget { commit: commit.clone(), release: release.clone(), release_name, deployment: deployment.unwrap_or_default() })
+            let release_name: String = db
+                .query_row("select name from releases where id = ?1", params![release], |r| r.get(0))
+                .optional()?
+                .unwrap_or_default();
+            Some(AgentTarget {
+                commit: commit.clone(),
+                release: release.clone(),
+                release_name,
+                deployment: deployment.unwrap_or_default(),
+            })
         }
         _ => None,
     };
@@ -550,7 +612,10 @@ async fn agent_report(State(s): State<AppState>, srv: AuthServer, Json(r): Json<
     }
     let db = s.db();
     let message: String = r.message.chars().take(500).collect();
-    db.execute("update servers set status = ?1, message = ?2, last_seen = ?3 where id = ?4", params![r.status, message, now(), srv.id])?;
+    db.execute(
+        "update servers set status = ?1, message = ?2, last_seen = ?3 where id = ?4",
+        params![r.status, message, now(), srv.id],
+    )?;
     match (r.status.as_str(), &r.deployment) {
         ("failed", Some(d)) => {
             db.execute("update servers set failed_deployment = ?1 where id = ?2", params![d, srv.id])?;

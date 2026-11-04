@@ -63,7 +63,15 @@ pub async fn new(name: &str, mc: &str, loader: &str) -> Result<()> {
         (_, Some(v)) => Some(v),
         (k, None) => {
             let versions = meta::loader_versions(k, mc).await?;
-            Some(versions.iter().find(|v| v.stable).or(versions.first()).context("no loader versions for that Minecraft version")?.version.clone())
+            Some(
+                versions
+                    .iter()
+                    .find(|v| v.stable)
+                    .or(versions.first())
+                    .context("no loader versions for that Minecraft version")?
+                    .version
+                    .clone(),
+            )
         }
     };
     let loader = Loader { kind, version };
@@ -137,7 +145,14 @@ pub fn status(dir: &Path) -> Result<()> {
         println!("  {} Minecraft {a} -> {b}", kind_mark(ChangeKind::Modified));
     }
     if let Some((a, b)) = &st.diff.loader {
-        println!("  {} Loader {} {} -> {} {}", kind_mark(ChangeKind::Modified), a.kind.label(), a.version.as_deref().unwrap_or(""), b.kind.label(), b.version.as_deref().unwrap_or(""));
+        println!(
+            "  {} Loader {} {} -> {} {}",
+            kind_mark(ChangeKind::Modified),
+            a.kind.label(),
+            a.version.as_deref().unwrap_or(""),
+            b.kind.label(),
+            b.version.as_deref().unwrap_or("")
+        );
     }
     if st.diff.is_empty() {
         println!("{}", ui::dim("No unsaved changes"));
@@ -168,7 +183,12 @@ pub fn log(dir: &Path, limit: usize) -> Result<()> {
     };
     for e in repo.log(&head, limit)? {
         let marker = if e.id == head { "●" } else { "○" };
-        println!("{marker} {} {}  {}", ui::bold(short(&e.id)), e.commit.message, ui::dim(format!("{} · {}", e.commit.author, ui::ago(e.commit.time))));
+        println!(
+            "{marker} {} {}  {}",
+            ui::bold(short(&e.id)),
+            e.commit.message,
+            ui::dim(format!("{} · {}", e.commit.author, ui::ago(e.commit.time)))
+        );
     }
     Ok(())
 }
@@ -360,7 +380,13 @@ pub async fn publish(dir: &Path, name: &str, notes: &str) -> Result<()> {
     let hub = hub_for(&repo)?;
     let rel = ops::publish(&repo, &hub, name, notes).await?;
     let code = repo.config()?.remote.map(|r| r.code).unwrap_or_default();
-    ui::ok(format!("Published {} ({}). Share code: {}  Link: {}/j/{code}", rel.name, short(&rel.commit), ui::bold(&code), hub.base));
+    ui::ok(format!(
+        "Published {} ({}). Share code: {}  Link: {}/j/{code}",
+        rel.name,
+        short(&rel.commit),
+        ui::bold(&code),
+        hub.base
+    ));
     Ok(())
 }
 
@@ -381,7 +407,12 @@ pub async fn deploy(dir: &Path, release: Option<String>, servers: Vec<String>) -
         DeployTargets::Some(
             servers
                 .iter()
-                .map(|s| all.iter().find(|x| &x.id == s || &x.name == s).map(|x| x.id.clone()).with_context(|| format!("no server {s}")))
+                .map(|s| {
+                    all.iter()
+                        .find(|x| &x.id == s || &x.name == s)
+                        .map(|x| x.id.clone())
+                        .with_context(|| format!("no server {s}"))
+                })
                 .collect::<Result<_>>()?,
         )
     };

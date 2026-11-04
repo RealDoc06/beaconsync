@@ -39,7 +39,12 @@ async fn publish_and_deploy_flow() {
     let hub = Hub::new(&base, Some(auth.token));
 
     let pack = hub
-        .create_pack(&NewPack { name: "Pack".into(), description: String::new(), minecraft: "1.21.1".into(), loader: Loader::default() })
+        .create_pack(&NewPack {
+            name: "Pack".into(),
+            description: String::new(),
+            minecraft: "1.21.1".into(),
+            loader: Loader::default(),
+        })
         .await
         .unwrap();
     let c1 = upload_commit(&hub, vec![], "one").await;
@@ -51,11 +56,15 @@ async fn publish_and_deploy_flow() {
     assert!(hub.update_ref(&pack.id, "main", &RefUpdate { old: None, new: c2.clone(), force: false }).await.is_err());
     hub.update_ref(&pack.id, "main", &RefUpdate { old: Some(c1), new: c2.clone(), force: false }).await.unwrap();
 
-    let release = hub.create_release(&pack.id, &NewRelease { commit: c2.clone(), name: "v1".into(), notes: String::new() }).await.unwrap();
+    let release =
+        hub.create_release(&pack.id, &NewRelease { commit: c2.clone(), name: "v1".into(), notes: String::new() }).await.unwrap();
     let public = anon.public_pack(&pack.code.to_lowercase()).await.unwrap();
     assert_eq!(public.latest.unwrap().commit, c2);
 
-    let server = hub.create_server(&pack.id, &NewServer { name: "s1".into(), mode: ServerMode::Service, address: "mc:25565".into() }).await.unwrap();
+    let server = hub
+        .create_server(&pack.id, &NewServer { name: "s1".into(), mode: ServerMode::Service, address: "mc:25565".into() })
+        .await
+        .unwrap();
     let agent = Hub::new(&base, Some(server.token));
     assert!(agent.agent_poll(0).await.unwrap().target.is_none());
     assert!(agent.library().await.is_err(), "server tokens can't act as users");
@@ -74,7 +83,12 @@ async fn publish_and_deploy_flow() {
     assert_eq!(target.commit, c2);
 
     agent
-        .agent_report(&AgentReport { deployment: Some(target.deployment), status: "done".into(), message: "ok".into(), commit: Some(c2.clone()) })
+        .agent_report(&AgentReport {
+            deployment: Some(target.deployment),
+            status: "done".into(),
+            message: "ok".into(),
+            commit: Some(c2.clone()),
+        })
         .await
         .unwrap();
     assert!(agent.agent_poll(0).await.unwrap().target.is_none());
@@ -99,15 +113,25 @@ async fn device_login() {
 #[tokio::test]
 async fn rolled_back_deploys_are_not_resent() {
     let (_tmp, base) = start().await;
-    let auth = Hub::new(&base, None).register(&Credentials { username: "doc".into(), password: "longpassword".into() }).await.unwrap();
+    let auth =
+        Hub::new(&base, None).register(&Credentials { username: "doc".into(), password: "longpassword".into() }).await.unwrap();
     let hub = Hub::new(&base, Some(auth.token));
     let pack = hub
-        .create_pack(&NewPack { name: "Pack".into(), description: String::new(), minecraft: "1.21.1".into(), loader: Loader::default() })
+        .create_pack(&NewPack {
+            name: "Pack".into(),
+            description: String::new(),
+            minecraft: "1.21.1".into(),
+            loader: Loader::default(),
+        })
         .await
         .unwrap();
     let c1 = upload_commit(&hub, vec![], "one").await;
-    let r1 = hub.create_release(&pack.id, &NewRelease { commit: c1.clone(), name: "v1".into(), notes: String::new() }).await.unwrap();
-    let s = hub.create_server(&pack.id, &NewServer { name: "s".into(), mode: ServerMode::Service, address: "mc".into() }).await.unwrap();
+    let r1 =
+        hub.create_release(&pack.id, &NewRelease { commit: c1.clone(), name: "v1".into(), notes: String::new() }).await.unwrap();
+    let s = hub
+        .create_server(&pack.id, &NewServer { name: "s".into(), mode: ServerMode::Service, address: "mc".into() })
+        .await
+        .unwrap();
     let agent = Hub::new(&base, Some(s.token));
     let deploy = |release: String| DeployRequest { release, servers: DeployTargets::All(AllServers::All) };
     let report = |status: &str| AgentReport { deployment: None, status: status.into(), message: String::new(), commit: None };

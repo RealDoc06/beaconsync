@@ -43,10 +43,7 @@ pub fn prism_instances_dir() -> Option<PathBuf> {
 
 /// Where new instances are created.
 pub fn default_instances_dir(override_dir: Option<&Path>) -> PathBuf {
-    override_dir
-        .map(Path::to_path_buf)
-        .or_else(prism_instances_dir)
-        .unwrap_or_else(|| data_dir().join("instances"))
+    override_dir.map(Path::to_path_buf).or_else(prism_instances_dir).unwrap_or_else(|| data_dir().join("instances"))
 }
 
 fn ini_get(text: &str, key: &str) -> Option<String> {
@@ -140,18 +137,25 @@ pub fn set_name(instance: &Path, name: &str) -> Result<()> {
 }
 
 /// `instance.cfg` keys that only make sense on the machine that wrote them.
-const MACHINE_KEYS: &[&str] =
-    &["JavaPath", "OverrideJavaLocation", "JavaSignature", "JavaVersion", "JavaArchitecture", "JavaRealArchitecture", "JavaVendor", "shortcuts", "uuid"];
+const MACHINE_KEYS: &[&str] = &[
+    "JavaPath",
+    "OverrideJavaLocation",
+    "JavaSignature",
+    "JavaVersion",
+    "JavaArchitecture",
+    "JavaRealArchitecture",
+    "JavaVendor",
+    "shortcuts",
+    "uuid",
+];
 
 /// Drops machine specific settings (Java path, shortcuts, ids) from an instance copied from
 /// another computer, so Prism picks a local Java on first launch.
 pub fn make_portable(instance: &Path) -> Result<()> {
     let path = instance.join("instance.cfg");
     let text = fs::read_to_string(&path)?;
-    let kept: Vec<&str> = text
-        .lines()
-        .filter(|l| l.split_once('=').is_none_or(|(k, _)| !MACHINE_KEYS.contains(&k.trim())))
-        .collect();
+    let kept: Vec<&str> =
+        text.lines().filter(|l| l.split_once('=').is_none_or(|(k, _)| !MACHINE_KEYS.contains(&k.trim()))).collect();
     fs::write(path, kept.join("\n") + "\n")?;
     Ok(())
 }

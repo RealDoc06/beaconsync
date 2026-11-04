@@ -109,13 +109,48 @@ pub struct LogEntry {
 
 /// Paths never tracked. Users extend this with `minecraft/.beaconignore` (gitignore syntax).
 pub const DEFAULT_IGNORE: &[&str] = &[
-    "saves/", "logs/", "crash-reports/", "screenshots/", "backups/", ".cache/", "cache/", "natives/",
-    ".fabric/", ".mixin.out/", "debug/", "downloads/", "journeymap/data/", "XaeroWorldMap/",
-    "XaeroWaypoints/", "xaero/", "frozenlib/", ".packignore", "server-resource-packs/", "local/", ".beacon/", "usercache.json",
-    "usernamecache.json", "servers.dat", "servers.dat_old", "options.txt", "optionsof.txt",
-    "optionsshaders.txt", "realms_persistence.json", "command_history.txt", "hotbar.nbt", "*.log",
-    "*.log.gz", "*.tmp", "*.part", "*.beacon-old", ".DS_Store", "Thumbs.db", "mods/.index/",
-    "mods/.connector/", "mods/beaconsync-companion*.jar", "icon.png",
+    "saves/",
+    "logs/",
+    "crash-reports/",
+    "screenshots/",
+    "backups/",
+    ".cache/",
+    "cache/",
+    "natives/",
+    ".fabric/",
+    ".mixin.out/",
+    "debug/",
+    "downloads/",
+    "journeymap/data/",
+    "XaeroWorldMap/",
+    "XaeroWaypoints/",
+    "xaero/",
+    "frozenlib/",
+    ".packignore",
+    "server-resource-packs/",
+    "local/",
+    ".beacon/",
+    "usercache.json",
+    "usernamecache.json",
+    "servers.dat",
+    "servers.dat_old",
+    "options.txt",
+    "optionsof.txt",
+    "optionsshaders.txt",
+    "realms_persistence.json",
+    "command_history.txt",
+    "hotbar.nbt",
+    "*.log",
+    "*.log.gz",
+    "*.tmp",
+    "*.part",
+    "*.beacon-old",
+    ".DS_Store",
+    "Thumbs.db",
+    "mods/.index/",
+    "mods/.connector/",
+    "mods/beaconsync-companion*.jar",
+    "icon.png",
 ];
 
 #[derive(Clone, Debug)]
@@ -399,7 +434,8 @@ impl Repo {
             .par_iter()
             .map(|(rel, abs, meta)| {
                 let size = meta.len();
-                let mtime = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+                let mtime =
+                    meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
                 let hash = match index.get(rel) {
                     Some(i) if i.size == size && i.mtime == mtime => i.hash.clone(),
                     _ => sha512_file(abs)?,
@@ -456,10 +492,8 @@ impl Repo {
     /// staging what it learns so future scans show proper names and sources.
     pub async fn identify(&self, tree: &Tree) -> Result<usize> {
         let staged: HashMap<String, Entry> = self.read_json("staged.json");
-        let unknown: Vec<(&String, &Entry)> = tree
-            .mods()
-            .filter(|(_, e)| e.source.is_none() && e.name.is_none() && !staged.contains_key(&e.hash))
-            .collect();
+        let unknown: Vec<(&String, &Entry)> =
+            tree.mods().filter(|(_, e)| e.source.is_none() && e.name.is_none() && !staged.contains_key(&e.hash)).collect();
         if unknown.is_empty() {
             return Ok(0);
         }
@@ -642,7 +676,12 @@ impl Repo {
     }
 
     /// Applies conflict picks to the working tree.
-    pub async fn resolve_conflicts(&self, conflicts: &[Conflict], picks: &[(String, merge::Pick)], on: OnProgress<'_>) -> Result<()> {
+    pub async fn resolve_conflicts(
+        &self,
+        conflicts: &[Conflict],
+        picks: &[(String, merge::Pick)],
+        on: OnProgress<'_>,
+    ) -> Result<()> {
         let mut tree = self.scan()?;
         let result = MergeResult { tree: tree.clone(), conflicts: conflicts.to_vec(), fast_forward: false };
         tree = merge::resolve(result, picks);

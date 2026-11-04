@@ -135,7 +135,6 @@ fn default_memory_mb() -> u32 {
     (half.clamp(2048, 8192) / 512) * 512
 }
 
-
 fn agent_hub(cfg: &ServerConfig) -> Option<Hub> {
     Some(Hub::new(cfg.hub.as_deref()?, Some(cfg.token.clone()?)))
 }
@@ -172,11 +171,7 @@ async fn install_self(dir: &Path, mode: ServerMode) -> Result<PathBuf> {
         if let Some(local) = std::env::var_os("BEACON_LINUX_BINARY") {
             fs::copy(local, &dest)?;
         } else {
-            let url = format!(
-                "{}/beacon-{}-unknown-linux-musl",
-                beacon_core::companion::RELEASES,
-                std::env::consts::ARCH
-            );
+            let url = format!("{}/beacon-{}-unknown-linux-musl", beacon_core::companion::RELEASES, std::env::consts::ARCH);
             match beacon_core::http().get(&url).send().await.and_then(|r| r.error_for_status()) {
                 Ok(resp) => fs::write(&dest, resp.bytes().await?)?,
                 Err(_) if cfg!(target_os = "linux") => {
@@ -221,7 +216,8 @@ async fn install(a: InstallArgs) -> Result<()> {
             .find(|p| p.code.eq_ignore_ascii_case(q) || &p.id == q || p.name.eq_ignore_ascii_case(q))
             .with_context(|| format!("no pack {q} in your library"))?,
         None => {
-            let items: Vec<String> = packs.iter().map(|p| format!("{}  {} {} · {}", p.name, p.loader.kind.label(), p.minecraft, p.code)).collect();
+            let items: Vec<String> =
+                packs.iter().map(|p| format!("{}  {} {} · {}", p.name, p.loader.kind.label(), p.minecraft, p.code)).collect();
             &packs[ui::select("Which pack?", &items, 0)?]
         }
     };
@@ -250,7 +246,10 @@ async fn install(a: InstallArgs) -> Result<()> {
     };
     let dir = match a.path {
         Some(p) => p,
-        None => PathBuf::from(ui::input("Install folder", Some(std::env::current_dir()?.join(srv::slug(&name)).to_string_lossy().into_owned()))?),
+        None => PathBuf::from(ui::input(
+            "Install folder",
+            Some(std::env::current_dir()?.join(srv::slug(&name)).to_string_lossy().into_owned()),
+        )?),
     };
     let memory_mb = match a.memory {
         Some(m) => m,
@@ -321,7 +320,8 @@ async fn install(a: InstallArgs) -> Result<()> {
 }
 
 fn run_cmd(program: &str, args: &[&str], dir: &Path) -> Result<()> {
-    let status = std::process::Command::new(program).args(args).current_dir(dir).status().with_context(|| format!("running {program}"))?;
+    let status =
+        std::process::Command::new(program).args(args).current_dir(dir).status().with_context(|| format!("running {program}"))?;
     if !status.success() {
         bail!("{program} {} failed", args.join(" "));
     }
@@ -347,9 +347,8 @@ fn setup_service(cfg: &ServerConfig, beacon: &Path, dir: &Path, no_start: bool) 
     fs::write(&unit_file, srv::systemd_unit(cfg, beacon, dir, &current_user()))?;
     let target = format!("/etc/systemd/system/{name}.service");
     let unit = unit_file.to_string_lossy().into_owned();
-    let sudo = |args: &[&str]| -> Result<()> {
-        if is_root() { run_cmd(args[0], &args[1..], dir) } else { run_cmd("sudo", args, dir) }
-    };
+    let sudo =
+        |args: &[&str]| -> Result<()> { if is_root() { run_cmd(args[0], &args[1..], dir) } else { run_cmd("sudo", args, dir) } };
     if !is_root() {
         ui::info("Installing the systemd service needs sudo");
     }
@@ -581,7 +580,8 @@ async fn supervise(dir: PathBuf) -> Result<()> {
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
     let mut mc = Some(Mc::start(&dir, &cfg)?);
-    report(&agent, None, "running", format!("running {}", cfg.release_name.clone().unwrap_or_default()), cfg.commit.clone()).await;
+    report(&agent, None, "running", format!("running {}", cfg.release_name.clone().unwrap_or_default()), cfg.commit.clone())
+        .await;
     let mut crashes: VecDeque<Instant> = VecDeque::new();
 
     loop {
@@ -656,7 +656,14 @@ async fn apply_update(dir: &Path, cfg: &mut ServerConfig, store: &ObjectStore, h
     }
 }
 
-async fn apply_with_backup(dir: &Path, cfg: &mut ServerConfig, store: &ObjectStore, hub: &Hub, tree: &Tree, t: &AgentTarget) -> Result<()> {
+async fn apply_with_backup(
+    dir: &Path,
+    cfg: &mut ServerConfig,
+    store: &ObjectStore,
+    hub: &Hub,
+    tree: &Tree,
+    t: &AgentTarget,
+) -> Result<()> {
     let d = dir.to_path_buf();
     tokio::task::spawn_blocking(move || backup(&d)).await??;
     let fetcher = Fetcher::new(Some(store.clone()), Some(hub.base.clone()));
@@ -686,8 +693,14 @@ fn backup_path(dir: &Path) -> PathBuf {
 
 fn skip_in_backup(rel: &Path) -> bool {
     let s = rel.to_string_lossy();
-    s.starts_with(".beacon/backup") || s.starts_with(".beacon/objects") || s.starts_with(".fabric") || s.starts_with(".beacon/bin") || s.starts_with(".beacon/home")
-        || s.starts_with("logs") || s.starts_with("crash-reports") || s.ends_with(".part")
+    s.starts_with(".beacon/backup")
+        || s.starts_with(".beacon/objects")
+        || s.starts_with(".fabric")
+        || s.starts_with(".beacon/bin")
+        || s.starts_with(".beacon/home")
+        || s.starts_with("logs")
+        || s.starts_with("crash-reports")
+        || s.ends_with(".part")
 }
 
 /// Replaces the single backup with a fresh one of the whole server (worlds included).
@@ -698,7 +711,11 @@ fn backup(dir: &Path) -> Result<()> {
         let enc = flate2::write::GzEncoder::new(fs::File::create(&tmp)?, flate2::Compression::fast());
         let mut tar = tar::Builder::new(enc);
         tar.follow_symlinks(false);
-        for e in walkdir::WalkDir::new(dir).min_depth(1).into_iter().filter_entry(|e| !skip_in_backup(e.path().strip_prefix(dir).unwrap_or(e.path()))) {
+        for e in walkdir::WalkDir::new(dir)
+            .min_depth(1)
+            .into_iter()
+            .filter_entry(|e| !skip_in_backup(e.path().strip_prefix(dir).unwrap_or(e.path())))
+        {
             let e = e?;
             if e.file_type().is_file() {
                 tar.append_path_with_name(e.path(), e.path().strip_prefix(dir)?)?;
@@ -762,7 +779,11 @@ async fn status(dir: &Path) -> Result<()> {
     println!("{}  {}", ui::bold(&cfg.name), ui::dim(dir.display()));
     println!("  Mode      {:?}", cfg.mode);
     println!("  Address   {}", cfg.address);
-    println!("  Version   {} {}", cfg.release_name.as_deref().unwrap_or("?"), ui::dim(cfg.commit.as_deref().map(short).unwrap_or("")));
+    println!(
+        "  Version   {} {}",
+        cfg.release_name.as_deref().unwrap_or("?"),
+        ui::dim(cfg.commit.as_deref().map(short).unwrap_or(""))
+    );
     if let Some((mc, l)) = &cfg.installed {
         println!("  Minecraft {mc} {} {}", l.kind.label(), l.version.as_deref().unwrap_or(""));
     }
@@ -805,7 +826,14 @@ async fn rollback(dir: &Path) -> Result<()> {
     tokio::task::spawn_blocking(move || restore(&d)).await??;
     let cfg = ServerConfig::load(dir)?;
     // The hub won't push the rolled back deployment again until a new deploy.
-    report(&agent_hub(&cfg), None, "rolledback", format!("rolled back to {}", cfg.release_name.clone().unwrap_or_default()), cfg.commit.clone()).await;
+    report(
+        &agent_hub(&cfg),
+        None,
+        "rolledback",
+        format!("rolled back to {}", cfg.release_name.clone().unwrap_or_default()),
+        cfg.commit.clone(),
+    )
+    .await;
     ui::ok(format!("Rolled back to {}. Start the server again.", cfg.release_name.unwrap_or_default()));
     Ok(())
 }

@@ -2,8 +2,7 @@
 
 use crate::{
     fetch::OnProgress,
-    hash,
-    instance,
+    hash, instance,
     model::{Entry, Loader, LoaderKind, Side, Source, Tree, client_only_path},
     repo::{self, PackConfig, Repo, Upstream},
     sources::{curseforge::CurseForge, modrinth},
@@ -140,7 +139,10 @@ pub async fn mrpack_tree(path: &Path, store: &ObjectStore) -> Result<(MrIndex, T
         if let Source::Modrinth { project, .. } = &source {
             project_ids.push(project.clone());
         }
-        tree.files.insert(rel, Entry { hash: f.hashes.sha512.clone(), size: f.file_size, side, name: None, version: None, source: Some(source) });
+        tree.files.insert(
+            rel,
+            Entry { hash: f.hashes.sha512.clone(), size: f.file_size, side, name: None, version: None, source: Some(source) },
+        );
     }
     // Overrides are copied in order, later folders win (client/server overrides).
     for prefix in ["overrides/", "client-overrides/", "server-overrides/"] {
@@ -186,7 +188,14 @@ pub async fn mrpack_tree(path: &Path, store: &ObjectStore) -> Result<(MrIndex, T
 }
 
 /// Creates a new instance + repo from a tree and saves the first version.
-pub async fn materialize(dir: &Path, config: PackConfig, tree: &Tree, message: &str, author: &str, on: OnProgress<'_>) -> Result<Repo> {
+pub async fn materialize(
+    dir: &Path,
+    config: PackConfig,
+    tree: &Tree,
+    message: &str,
+    author: &str,
+    on: OnProgress<'_>,
+) -> Result<Repo> {
     instance::create(dir, &config.name, &tree.minecraft, &tree.loader)?;
     let repo = Repo::init(dir, config)?;
     repo.checkout_tree(tree, None, on).await?;
@@ -196,7 +205,13 @@ pub async fn materialize(dir: &Path, config: PackConfig, tree: &Tree, message: &
 
 /// Imports a `.mrpack`. When `upstream` is known (installed from Modrinth) it is recorded so
 /// the pack can later pull new modpack versions.
-pub async fn import_mrpack(file: &Path, root: &Path, upstream: Option<(String, String)>, author: &str, on: OnProgress<'_>) -> Result<Repo> {
+pub async fn import_mrpack(
+    file: &Path,
+    root: &Path,
+    upstream: Option<(String, String)>,
+    author: &str,
+    on: OnProgress<'_>,
+) -> Result<Repo> {
     let staging = ObjectStore::new(crate::instance::data_dir().join("import-cache"));
     let (index, tree) = mrpack_tree(file, &staging).await?;
     let dir = instance::unique_dir(root, &index.name);
@@ -241,7 +256,13 @@ fn copy_blobs(from: &ObjectStore, to: &ObjectStore, tree: &Tree) -> Result<()> {
 }
 
 /// Downloads and imports the newest (or a given) version of a Modrinth modpack.
-pub async fn install_modrinth_pack(project: &str, version: Option<&str>, root: &Path, author: &str, on: OnProgress<'_>) -> Result<Repo> {
+pub async fn install_modrinth_pack(
+    project: &str,
+    version: Option<&str>,
+    root: &Path,
+    author: &str,
+    on: OnProgress<'_>,
+) -> Result<Repo> {
     let v = match version {
         Some(id) => modrinth::version(id).await?,
         None => modrinth::versions(project, None, None).await?.into_iter().next().context("modpack has no versions")?,
@@ -339,7 +360,8 @@ pub async fn import_curseforge(file: &Path, root: &Path, cf: &CurseForge, author
     for (i, f) in files.into_iter().enumerate() {
         let url = f.url();
         let dest = game.join("mods").join(&f.file_name);
-        let sha512 = crate::fetch::download_unverified(&url, &dest).await.with_context(|| format!("downloading {}", f.file_name))?;
+        let sha512 =
+            crate::fetch::download_unverified(&url, &dest).await.with_context(|| format!("downloading {}", f.file_name))?;
         let meta = repo::read_jar_meta(&dest).unwrap_or_default();
         staged.push(Entry {
             hash: sha512,
@@ -423,9 +445,10 @@ pub fn export_mrpack(repo: &Repo, out: &Path, version_id: &str) -> Result<()> {
         if crate::model::is_disabled(path) {
             continue;
         }
-        let downloadable = e.source.as_ref().map(|s| s.url()).filter(|u| {
-            url::Url::parse(u).ok().and_then(|u| u.host_str().map(|h| MRPACK_HOSTS.contains(&h))).unwrap_or(false)
-        });
+        let downloadable =
+            e.source.as_ref().map(|s| s.url()).filter(|u| {
+                url::Url::parse(u).ok().and_then(|u| u.host_str().map(|h| MRPACK_HOSTS.contains(&h))).unwrap_or(false)
+            });
         let bytes = fs::read(game.join(path))?;
         match downloadable {
             Some(url) => files.push(MrFile {

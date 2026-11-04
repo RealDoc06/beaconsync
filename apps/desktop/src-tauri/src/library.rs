@@ -175,7 +175,8 @@ pub async fn search_modrinth(
     loader: Option<LoaderKind>,
     offset: u32,
 ) -> Res<SearchResult> {
-    Ok(modrinth::search(SearchQuery { query: &query, project_type, minecraft: minecraft.as_deref(), loader, offset, limit: 30 }).await?)
+    Ok(modrinth::search(SearchQuery { query: &query, project_type, minecraft: minecraft.as_deref(), loader, offset, limit: 30 })
+        .await?)
 }
 
 #[tauri::command]

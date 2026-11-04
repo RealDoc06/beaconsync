@@ -48,4 +48,3 @@ pub fn author(s: &Settings) -> String {
         .or_else(|| std::env::var("USER").or_else(|_| std::env::var("USERNAME")).ok())
         .unwrap_or_else(|| "me".into())
 }
-

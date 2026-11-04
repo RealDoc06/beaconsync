@@ -5,8 +5,7 @@ use crate::{
     api::{NewPack, NewRelease, PackPatch, RefUpdate, Release},
     fetch::OnProgress,
     hub::Hub,
-    import,
-    instance,
+    import, instance,
     merge::MergeResult,
     model::{Commit, Tree},
     repo::{PackConfig, Remote, Repo, Role, Upstream},
@@ -83,7 +82,12 @@ pub async fn ensure_remote(repo: &Repo, hub: &Hub) -> Result<Remote> {
     }
     let tree = repo.head_tree()?.context("save a version before publishing")?;
     let pack = hub
-        .create_pack(&NewPack { name: cfg.name.clone(), description: String::new(), minecraft: tree.minecraft.clone(), loader: tree.loader.clone() })
+        .create_pack(&NewPack {
+            name: cfg.name.clone(),
+            description: String::new(),
+            minecraft: tree.minecraft.clone(),
+            loader: tree.loader.clone(),
+        })
         .await?;
     let remote = Remote { hub: hub.base.clone(), pack: pack.id, code: pack.code, branch: "main".into() };
     cfg.remote = Some(remote.clone());
@@ -109,7 +113,8 @@ pub async fn publish(repo: &Repo, hub: &Hub, name: &str, notes: &str) -> Result<
     }
     let commit = push(repo, hub, false).await?;
     let tree = repo.commit_tree(&commit)?;
-    hub.patch_pack(&remote.pack, &PackPatch { minecraft: Some(tree.minecraft), loader: Some(tree.loader), ..Default::default() }).await?;
+    hub.patch_pack(&remote.pack, &PackPatch { minecraft: Some(tree.minecraft), loader: Some(tree.loader), ..Default::default() })
+        .await?;
     hub.create_release(&remote.pack, &NewRelease { commit, name: name.into(), notes: notes.into() }).await
 }
 

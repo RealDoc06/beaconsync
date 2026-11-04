@@ -49,10 +49,8 @@ pub fn merge(base: &Tree, ours: &Tree, theirs: &Tree) -> MergeResult {
         m.get(id).map(|(p, e)| (p.to_string(), (*e).clone()))
     };
     let ids: BTreeSet<&String> = b.keys().chain(o.keys()).chain(t.keys()).collect();
-    let mut tree = Tree::new(
-        pick3(&base.minecraft, &ours.minecraft, &theirs.minecraft),
-        pick3(&base.loader, &ours.loader, &theirs.loader),
-    );
+    let mut tree =
+        Tree::new(pick3(&base.minecraft, &ours.minecraft, &theirs.minecraft), pick3(&base.loader, &ours.loader, &theirs.loader));
     let mut conflicts = Vec::new();
     for id in ids {
         let (bs, os, ts) = (owned(&b, id), owned(&o, id), owned(&t, id));
