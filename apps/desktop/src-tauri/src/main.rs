@@ -24,6 +24,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             library::list_instances,
             library::instance_badges,
+            library::instance_icon,
             library::create_pack,
             library::import_file,
             library::adopt_instance,
@@ -48,7 +49,7 @@ fn main() {
             pack::save_version,
             pack::abort_merge,
             pack::history,
-            pack::restore_version,
+            pack::rollback,
             pack::reset_version,
             pack::switch_branch,
             pack::create_branch,

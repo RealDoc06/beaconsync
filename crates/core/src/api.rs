@@ -169,6 +169,11 @@ pub struct PublicServer {
     pub address: String,
     pub commit: Option<String>,
     pub online: bool,
+    /// A deploy to `target` is pending or applying (the companion rejoins afterwards).
+    #[serde(default)]
+    pub updating: bool,
+    #[serde(default)]
+    pub target: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -83,6 +83,13 @@ enum Cmd {
     Restore { rev: String },
     /// Move the branch back to a version, dropping newer ones.
     Reset { rev: String },
+    /// Roll back to a version for everyone: save it as a new version, publish and deploy it.
+    Rollback {
+        rev: String,
+        /// Only roll back locally; don't publish or deploy.
+        #[arg(long)]
+        local: bool,
+    },
     /// List, create (`beacon branch name`) or delete (`-d`) branches.
     Branch {
         name: Option<String>,
@@ -178,6 +185,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Discard => pack::discard(&dir).await,
         Cmd::Restore { rev } => pack::restore(&dir, &rev).await,
         Cmd::Reset { rev } => pack::reset(&dir, &rev).await,
+        Cmd::Rollback { rev, local } => pack::rollback(&dir, &rev, local).await,
         Cmd::Branch { name, delete } => pack::branch(&dir, name, delete),
         Cmd::Switch { target, force } => pack::switch(&dir, &target, force).await,
         Cmd::Merge { branch } => pack::merge(&dir, &branch).await,

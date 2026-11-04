@@ -8,6 +8,7 @@ import { askConfirm, keys, packKeys, useAction, useApp, type PackTab } from '../
 import type { PackInfo } from '../lib/types'
 import { ChangesTab } from './pack/Changes'
 import { HistoryTab } from './pack/History'
+import { InstanceIcon } from '../components/InstanceIcon'
 import { ModsTab } from './pack/Mods'
 import { ServersTab } from './pack/Servers'
 import { ShareTab } from './pack/Share'
@@ -54,7 +55,7 @@ export function PackView({ path, tab }: { path: string; tab: PackTab }) {
       <div className="flex min-h-0 flex-1 flex-col">
         {active === 'mods' && <ModsTab p={p} />}
         {active === 'changes' && <ChangesTab path={path} />}
-        {active === 'history' && <HistoryTab path={path} />}
+        {active === 'history' && <HistoryTab path={path} published={!!p.config.remote && !!settings.data?.signed_in} />}
         {active === 'servers' && <ServersTab p={p} />}
         {active === 'share' && <ShareTab p={p} />}
       </div>
@@ -76,7 +77,8 @@ function Header({ p }: { p: PackInfo }) {
   return (
     <PageHeader
       title={
-        <span className="flex items-baseline gap-3">
+        <span className="flex items-center gap-3">
+          <InstanceIcon path={p.path} size={28} />
           <span>{p.name}</span>
           <span className="text-xs font-normal text-muted">
             Minecraft {p.minecraft} · {loaderText(p.loader)}

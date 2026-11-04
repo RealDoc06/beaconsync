@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { InstanceIcon } from '../components/InstanceIcon'
 import { PageHeader } from '../components/PageHeader'
 import { Button, Empty, ErrorLine, Input, Tag } from '../components/ui'
 import { call } from '../lib/api'
@@ -75,6 +76,7 @@ function Row({ item }: { item: LibraryItem }) {
       className={`grid h-11 grid-cols-[minmax(0,1fr)_80px_130px_50px_140px_150px] items-center gap-3 border-b border-line px-5 ${item.tracked ? 'cursor-default hover:bg-hover' : ''}`}
     >
       <div className="flex min-w-0 items-center gap-2">
+        <InstanceIcon path={item.path} size={24} />
         <span className={`truncate ${item.tracked ? '' : 'text-muted'}`}>{item.name}</span>
         {item.role === 'subscriber' && <Tag>joined</Tag>}
         {item.upstream && <Tag>from {item.upstream}</Tag>}

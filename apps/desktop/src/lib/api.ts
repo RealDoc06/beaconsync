@@ -13,6 +13,7 @@ export interface Commands {
   // library
   list_instances: Cmd<None, T.LibraryItem[]>
   instance_badges: Cmd<P, T.Badges>
+  instance_icon: Cmd<P, string | null>
   create_pack: Cmd<{ name: string; minecraft: string; loader: T.Loader }, string>
   import_file: Cmd<{ file: string }, string>
   adopt_instance: Cmd<{ dir: string }, string>
@@ -41,7 +42,7 @@ export interface Commands {
   save_version: Cmd<P<{ message: string }>, string>
   abort_merge: Cmd<P, null>
   history: Cmd<P, T.History>
-  restore_version: Cmd<P<{ id: string }>, string>
+  rollback: Cmd<P<{ id: string; publish: boolean }>, T.Rollback>
   reset_version: Cmd<P<{ id: string }>, null>
   switch_branch: Cmd<P<{ name: string }>, null>
   create_branch: Cmd<P<{ name: string }>, null>

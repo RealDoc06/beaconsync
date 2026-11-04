@@ -256,13 +256,14 @@ pub async fn history(path: String) -> Res<History> {
     .await
 }
 
-/// Puts an old version's files back and saves that as a new version.
+/// Puts an old version's files back and saves that as a new version. With `publish`, also
+/// releases it and deploys it to every server, so players and servers roll back too.
 #[tauri::command]
-pub async fn restore_version(app: AppHandle, path: String, id: String) -> Res<String> {
+pub async fn rollback(app: AppHandle, path: String, id: String, publish: bool) -> Res<ops::Rollback> {
     let repo = open(&path)?;
-    let msg = repo.read_commit(&id)?.message;
-    repo.restore(&id, &progress(&app)).await?;
-    Ok(repo.commit(&format!("Restored \"{msg}\""), &author(&Settings::load())).await?)
+    let settings = Settings::load();
+    let hub = if publish { Some(beacon_core::hub::Hub::authed(&settings)?) } else { None };
+    Ok(ops::rollback(&repo, hub.as_ref(), &id, &author(&settings), &progress(&app)).await?)
 }
 
 /// Moves the branch back to an old version, dropping newer ones.

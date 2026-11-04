@@ -270,3 +270,72 @@ pub fn launch(instance: &Path, prism_override: Option<&Path>, server: Option<&st
     cmd.spawn().context("starting Prism Launcher")?;
     Ok(())
 }
+
+/// Prism's built-in icons, pinned to a commit so paths never move. Fetched on first use and
+/// cached instead of bundled: Prism's art is GPL / CC BY-SA, BeaconSync is MIT.
+const PRISM_ICONS: &str = "https://raw.githubusercontent.com/PrismLauncher/PrismLauncher/059e858e101edc9314ccb94aa48bd01b282539c5/launcher/resources/multimc";
+
+const IMAGE_TYPES: &[(&str, &str)] = &[
+    ("png", "image/png"),
+    ("svg", "image/svg+xml"),
+    ("jpg", "image/jpeg"),
+    ("jpeg", "image/jpeg"),
+    ("gif", "image/gif"),
+    ("webp", "image/webp"),
+    ("ico", "image/x-icon"),
+];
+
+/// Prism's icons folder, honoring a custom `IconsDir` in `prismlauncher.cfg`.
+fn prism_icons_dir() -> Option<PathBuf> {
+    let data = prism_data_dir()?;
+    let cfg = fs::read_to_string(data.join("prismlauncher.cfg")).unwrap_or_default();
+    Some(match ini_get(&cfg, "IconsDir").filter(|v| !v.is_empty()) {
+        Some(dir) if Path::new(&dir).is_absolute() => PathBuf::from(dir),
+        Some(dir) => data.join(dir),
+        None => data.join("icons"),
+    })
+}
+
+/// `<dir>/<key>.<image ext>` if present, with its mime type.
+fn find_image(dir: &Path, key: &str) -> Option<(PathBuf, &'static str)> {
+    IMAGE_TYPES.iter().map(|(ext, mime)| (dir.join(format!("{key}.{ext}")), *mime)).find(|(p, _)| p.is_file())
+}
+
+/// The instance's Prism icon as (bytes, mime type): a custom one from Prism's icons folder,
+/// else Prism's built-in icon of that name (downloaded once, then cached). None when the
+/// key is unknown or the download fails; callers show a placeholder.
+pub async fn icon(instance: &Path) -> Option<(Vec<u8>, &'static str)> {
+    let cfg = fs::read_to_string(instance.join("instance.cfg")).ok()?;
+    let key = ini_get(&cfg, "iconKey").filter(|k| !k.is_empty()).unwrap_or_else(|| "default".into());
+    let key = if key == "default" { "grass".to_string() } else { key };
+    if !key.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c)) || key.starts_with('.') {
+        return None;
+    }
+    let cache = data_dir().join("icons");
+    if let Some((path, mime)) = prism_icons_dir().and_then(|d| find_image(&d, &key)).or_else(|| find_image(&cache, &key)) {
+        return Some((fs::read(path).ok()?, mime));
+    }
+    let missing = cache.join(format!("{key}.missing"));
+    if missing.exists() {
+        return None;
+    }
+    for (size, ext, mime) in [
+        ("scalable", "svg", "image/svg+xml"),
+        ("128x128", "png", "image/png"),
+        ("50x50", "png", "image/png"),
+        ("32x32", "png", "image/png"),
+    ] {
+        let resp = crate::http().get(format!("{PRISM_ICONS}/{size}/instances/{key}.{ext}")).send().await.ok()?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            continue;
+        }
+        let bytes = resp.error_for_status().ok()?.bytes().await.ok()?.to_vec();
+        fs::create_dir_all(&cache).ok()?;
+        fs::write(cache.join(format!("{key}.{ext}")), &bytes).ok()?;
+        return Some((bytes, mime));
+    }
+    // Not a Prism icon (e.g. a custom icon that was deleted); don't ask again.
+    fs::create_dir_all(&cache).ok()?;
+    fs::write(missing, b"").ok()?;
+    None
+}

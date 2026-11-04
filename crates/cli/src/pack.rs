@@ -211,6 +211,19 @@ pub async fn restore(dir: &Path, rev: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn rollback(dir: &Path, rev: &str, local: bool) -> Result<()> {
+    let repo = find(dir)?;
+    let hub = if local || repo.config()?.remote.is_none() { None } else { Some(hub_for(&repo)?) };
+    let bar = Bar::new();
+    let r = ops::rollback(&repo, hub.as_ref(), rev, &author(), &|p| bar.update(p)).await?;
+    bar.done();
+    match r.release {
+        Some(rel) => ui::ok(format!("Rolled back. Published {} and deploying to {} server(s)", rel.name, r.servers)),
+        None => ui::ok(format!("Rolled back to {rev}, saved as {}", short(&r.commit))),
+    }
+    Ok(())
+}
+
 pub async fn reset(dir: &Path, rev: &str) -> Result<()> {
     let repo = find(dir)?;
     if !ui::confirm(&format!("Drop every version after {rev}?"), false)? {

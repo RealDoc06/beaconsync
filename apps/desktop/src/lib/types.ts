@@ -168,6 +168,13 @@ export interface Release {
   created: number
 }
 
+/** Result of rolling back; `release` is set when it was published and deployed. */
+export interface Rollback {
+  commit: string
+  release: Release | null
+  servers: number
+}
+
 export interface Server {
   id: string
   name: string

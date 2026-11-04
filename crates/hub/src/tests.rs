@@ -147,3 +147,36 @@ async fn rolled_back_deploys_are_not_resent() {
     hub.deploy(&pack.id, &deploy(r1.id)).await.unwrap();
     assert!(agent.agent_poll(0).await.unwrap().target.is_some());
 }
+
+#[tokio::test]
+async fn rollback_publishes_old_files_as_a_new_release_and_deploys_it() {
+    use beacon_core::{fetch::no_progress, instance, model::LoaderKind, ops, repo};
+    let (tmp, base) = start().await;
+    let auth =
+        Hub::new(&base, None).register(&Credentials { username: "doc".into(), password: "longpassword".into() }).await.unwrap();
+    let hub = Hub::new(&base, Some(auth.token));
+
+    let dir = tmp.path().join("pack");
+    instance::create(&dir, "Pack", "1.21.1", &Loader { kind: LoaderKind::Fabric, version: Some("0.16.9".into()) }).unwrap();
+    let repo = repo::Repo::init(&dir, repo::local_config("Pack")).unwrap();
+    let cfg = repo.game_dir().join("config/a.toml");
+    std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+    std::fs::write(&cfg, "1").unwrap();
+    let v1 = repo.commit("v1", "doc").await.unwrap();
+    ops::publish(&repo, &hub, "1.0", "").await.unwrap();
+    std::fs::write(&cfg, "2").unwrap();
+    repo.commit("v2", "doc").await.unwrap();
+    ops::publish(&repo, &hub, "1.1", "").await.unwrap();
+    let pack = repo.config().unwrap().remote.unwrap().pack;
+    hub.create_server(&pack, &NewServer { name: "s1".into(), mode: ServerMode::Service, address: "mc:25565".into() })
+        .await
+        .unwrap();
+
+    let r = ops::rollback(&repo, Some(&hub), &v1, "doc", &no_progress).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&cfg).unwrap(), "1");
+    assert_eq!(repo.commit_tree(&r.commit).unwrap(), repo.commit_tree(&v1).unwrap());
+    assert_eq!(repo.log("HEAD", 10).unwrap().len(), 3, "history only moves forward");
+    assert_eq!(r.release.unwrap().name, "1.0 (rollback)");
+    assert_eq!(r.servers, 1);
+    assert_eq!(hub.servers(&pack).await.unwrap()[0].target_commit.as_deref(), Some(r.commit.as_str()));
+}

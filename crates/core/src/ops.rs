@@ -2,7 +2,7 @@
 //! following releases and pulling upstream changes.
 
 use crate::{
-    api::{NewPack, NewRelease, PackPatch, RefUpdate, Release},
+    api::{AllServers, DeployRequest, DeployTargets, NewPack, NewRelease, PackPatch, RefUpdate, Release},
     fetch::OnProgress,
     hub::Hub,
     import, instance,
@@ -118,6 +118,44 @@ pub async fn publish(repo: &Repo, hub: &Hub, name: &str, notes: &str) -> Result<
     hub.create_release(&remote.pack, &NewRelease { commit, name: name.into(), notes: notes.into() }).await
 }
 
+/// What a rollback did: the new version, and the release and servers when published.
+#[derive(Serialize, Debug)]
+pub struct Rollback {
+    pub commit: String,
+    pub release: Option<Release>,
+    pub servers: usize,
+}
+
+/// Rolls the pack back to an older version for everyone. The old files are saved as a new
+/// version (history only moves forward, so players, servers and forks keep following), then,
+/// when `hub` is given and the pack is published, released and deployed to every server.
+pub async fn rollback(repo: &Repo, hub: Option<&Hub>, rev: &str, author: &str, on: OnProgress<'_>) -> Result<Rollback> {
+    let target = repo.resolve(rev)?;
+    let label = match (hub, repo.config()?.remote) {
+        (Some(hub), Some(remote)) => hub.releases(&remote.pack).await?.into_iter().find(|r| r.commit == target).map(|r| r.name),
+        _ => None,
+    }
+    .unwrap_or_else(|| repo.read_commit(&target).map(|c| c.message).unwrap_or_default());
+    repo.restore(&target, on).await?;
+    let commit = if repo.is_dirty()? {
+        repo.commit(&format!("Rolled back to \"{label}\""), author).await?
+    } else {
+        repo.head_commit()?.context("nothing saved yet")?
+    };
+    let (Some(hub), Some(_)) = (hub, repo.config()?.remote) else {
+        return Ok(Rollback { commit, release: None, servers: 0 });
+    };
+    let release = publish(repo, hub, &format!("{label} (rollback)"), &format!("Rolled back to {label}")).await?;
+    let pack = repo.config()?.remote.context("pack is not published")?.pack;
+    let servers = if hub.servers(&pack).await?.is_empty() {
+        0
+    } else {
+        let req = DeployRequest { release: release.id.clone(), servers: DeployTargets::All(AllServers::All) };
+        hub.deploy(&pack, &req).await?.servers.len()
+    };
+    Ok(Rollback { commit, release: Some(release), servers })
+}
+
 /// Clones a published pack by share code into a new instance.
 /// `fork = false` follows the owner's releases (subscriber); `fork = true` makes an
 /// editable copy that can pull upstream changes later.
@@ -192,7 +230,9 @@ pub async fn check_release(repo: &Repo) -> Result<UpdateInfo> {
 /// Installs the newest release of a subscribed pack (local edits are replaced).
 pub async fn update_subscribed(repo: &Repo, on: OnProgress<'_>) -> Result<UpdateInfo> {
     let info = check_release(repo).await?;
-    let Some(commit) = info.commit.clone().filter(|_| info.available) else { return Ok(info) };
+    let Some(commit) = info.commit.clone().filter(|_| info.available) else {
+        return Ok(info);
+    };
     let remote = repo.config()?.remote.context("not linked")?;
     let hub = Hub::new(&remote.hub, None);
     fetch_commit(repo, &hub, &commit).await?;
@@ -206,7 +246,9 @@ pub async fn update_subscribed(repo: &Repo, on: OnProgress<'_>) -> Result<Update
 /// For owners editing on several machines: brings in hub versions newer than local ones.
 pub async fn pull(repo: &Repo, hub: &Hub, on: OnProgress<'_>) -> Result<Option<MergeResult>> {
     let remote = repo.config()?.remote.context("not published")?;
-    let Some(tip) = hub.refs(&remote.pack).await?.get(&remote.branch).cloned() else { return Ok(None) };
+    let Some(tip) = hub.refs(&remote.pack).await?.get(&remote.branch).cloned() else {
+        return Ok(None);
+    };
     fetch_commit(repo, hub, &tip).await?;
     let local = repo.branch_commit(&remote.branch)?;
     match local {

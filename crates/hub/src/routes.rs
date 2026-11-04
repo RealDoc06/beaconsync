@@ -281,7 +281,9 @@ async fn create_pack(State(s): State<AppState>, u: AuthUser, Json(p): Json<NewPa
         );
         match res {
             Ok(_) => return Ok(Json(load_pack(&db, &id, Some(&u.id))?)),
-            Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => continue,
+            Err(rusqlite::Error::SqliteFailure(e, _)) if e.code == rusqlite::ErrorCode::ConstraintViolation => {
+                continue;
+            }
             Err(e) => return Err(e.into()),
         }
     }
@@ -499,7 +501,17 @@ pub fn public_info(s: &AppState, code: &str) -> Result<PublicPack> {
     let p = load_pack(&db, &id, None)?;
     let servers = servers_of(&db, &id)?
         .into_iter()
-        .map(|s| PublicServer { name: s.name, address: s.address, commit: s.current_commit, online: s.online })
+        .map(|s| {
+            let updating = matches!(s.status.as_str(), "pending" | "applying");
+            PublicServer {
+                name: s.name,
+                address: s.address,
+                commit: s.current_commit,
+                online: s.online,
+                updating,
+                target: s.target_commit.filter(|_| updating),
+            }
+        })
         .collect();
     Ok(PublicPack {
         id: p.id,

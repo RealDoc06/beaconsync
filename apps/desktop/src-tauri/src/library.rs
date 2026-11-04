@@ -72,6 +72,15 @@ pub struct Badges {
 }
 
 /// Per instance state badges, computed lazily per library row.
+/// The instance's Prism icon as a data URL, or null for the placeholder.
+#[tauri::command]
+pub async fn instance_icon(path: String) -> Res<Option<String>> {
+    use base64::Engine;
+    Ok(instance::icon(std::path::Path::new(&path))
+        .await
+        .map(|(bytes, mime)| format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))))
+}
+
 #[tauri::command]
 pub async fn instance_badges(path: String) -> Res<Badges> {
     let repo = open(&path)?;

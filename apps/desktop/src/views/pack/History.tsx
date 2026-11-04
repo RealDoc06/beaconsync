@@ -1,18 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Button, Dialog, Empty, ErrorLine, Input, Select } from '../../components/ui'
+import { Button, Dialog, Empty, ErrorLine, Input, Select, Toggle } from '../../components/ui'
 import { call } from '../../lib/api'
 import { ago, shortId } from '../../lib/format'
 import { askConfirm, keys, packKeys, useAction, useApp } from '../../lib/store'
 import type { History, LogEntry } from '../../lib/types'
 
-export function HistoryTab({ path }: { path: string }) {
+export function HistoryTab({ path, published }: { path: string; published: boolean }) {
   const history = useQuery({ queryKey: [...keys.pack(path), 'history'], queryFn: () => call('history', { path }) })
-  const restore = useAction((id: string) => call('restore_version', { path, id }), {
-    label: 'Restoring version',
-    invalidate: packKeys(path),
-    done: 'Restored and saved as a new version',
-  })
+  const [rollingBack, setRollingBack] = useState<LogEntry | null>(null)
   const reset = useAction((id: string) => call('reset_version', { path, id }), {
     label: 'Going back',
     invalidate: packKeys(path),
@@ -32,14 +28,7 @@ export function HistoryTab({ path }: { path: string }) {
             e={e}
             current={e.id === h.head}
             newer={i}
-            onRestore={() =>
-              askConfirm({
-                title: 'Restore this version?',
-                body: `Files go back to "${e.message}" and that is saved as a new version. Unsaved changes are replaced. Nothing in History is lost.`,
-                action: 'Restore',
-                onConfirm: () => restore.mutate(e.id),
-              })
-            }
+            onRestore={() => setRollingBack(e)}
             onReset={() =>
               askConfirm({
                 title: 'Go back to this version?',
@@ -52,7 +41,46 @@ export function HistoryTab({ path }: { path: string }) {
           />
         ))}
       </div>
+      {rollingBack && <RollbackDialog path={path} e={rollingBack} published={published} onClose={() => setRollingBack(null)} />}
     </div>
+  )
+}
+
+/** Rolls back by saving the old files as a new version, and for published packs also
+ * releasing and deploying it so players and servers go back too. */
+function RollbackDialog({ path, e, published, onClose }: { path: string; e: LogEntry; published: boolean; onClose: () => void }) {
+  const [everyone, setEveryone] = useState(published)
+  const rollback = useAction(() => call('rollback', { path, id: e.id, publish: everyone }), {
+    label: 'Rolling back',
+    invalidate: packKeys(path),
+    done: (r) =>
+      r.release
+        ? `Rolled back. Players get ${r.release.name}${r.servers ? `, ${r.servers} server${r.servers === 1 ? '' : 's'} updating` : ''}`
+        : 'Rolled back and saved as a new version',
+    onSuccess: onClose,
+  })
+  return (
+    <Dialog
+      title="Roll back to this version?"
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" disabled={rollback.isPending} onClick={() => rollback.mutate(undefined)}>
+            Roll back
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <p>
+          Files go back to <span className="font-medium">{e.message || shortId(e.id)}</span> and that is saved as a new version. Unsaved
+          changes are replaced. Nothing in History is lost.
+        </p>
+        {published && <Toggle checked={everyone} onChange={setEveryone} label="Also roll back players and servers" />}
+        {published && everyone && <p className="text-xs text-muted">Publishes it as an update and deploys it to all servers.</p>}
+      </div>
+    </Dialog>
   )
 }
 
@@ -85,7 +113,7 @@ function VersionRow({
         {!current && (
           <>
             <Button small onClick={onRestore}>
-              Restore this version
+              Roll back to this
             </Button>
             {newer > 0 && (
               <Button small variant="ghost" onClick={onReset}>
