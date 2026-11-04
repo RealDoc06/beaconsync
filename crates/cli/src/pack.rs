@@ -27,7 +27,7 @@ pub enum ExportKind {
     Server,
 }
 
-fn author() -> String {
+pub(crate) fn author() -> String {
     Settings::load().username.or_else(|| std::env::var("USER").ok()).unwrap_or_else(|| "me".into())
 }
 
@@ -355,7 +355,7 @@ pub async fn upstream(dir: &Path, pull: bool) -> Result<()> {
     Ok(())
 }
 
-fn hub_for(repo: &Repo) -> Result<Hub> {
+pub(crate) fn hub_for(repo: &Repo) -> Result<Hub> {
     let s = Settings::load();
     let mut hub = Hub::authed(&s)?;
     if let Some(r) = repo.config()?.remote {

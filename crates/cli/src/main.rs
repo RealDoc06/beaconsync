@@ -1,11 +1,13 @@
 //! `beacon`: the BeaconSync command line.
 //!
-//! Pack commands work on the instance in the current folder (or `-C <dir>`), like git.
+//! With no command it opens the full screen UI (`tui.rs`). Pack commands work on the
+//! instance in the current folder (or `-C <dir>`), like git.
 //! `beacon server ...` installs and runs auto-updating Minecraft servers.
 
 mod account;
 mod pack;
 mod server;
+mod tui;
 mod ui;
 
 use clap::{Parser, Subcommand};
@@ -17,8 +19,9 @@ struct Cli {
     /// Instance folder to work on (defaults to the current folder).
     #[arg(short = 'C', long, global = true)]
     dir: Option<PathBuf>,
+    /// Omit to open the full screen UI.
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -170,7 +173,15 @@ async fn main() {
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
     let dir = cli.dir.clone().unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    match cli.cmd {
+    let Some(cmd) = cli.cmd else {
+        use std::io::IsTerminal;
+        if !std::io::stdout().is_terminal() {
+            <Cli as clap::CommandFactory>::command().print_help()?;
+            return Ok(());
+        }
+        return tui::run().await;
+    };
+    match cmd {
         Cmd::Login { hub, password } => account::login(hub, password).await,
         Cmd::Logout => account::logout(),
         Cmd::Whoami => account::whoami().await,

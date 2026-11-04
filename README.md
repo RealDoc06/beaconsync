@@ -92,7 +92,13 @@ From now on, Deploy in the app updates the server.
 
 ### CLI for pack authors
 
-The CLI works inside any instance folder, like git:
+Run `beacon` with no command for a full screen UI: your packs on the left, changes, history,
+branches and releases with live server status on the right. Save, roll back, publish, deploy,
+update and play from the keyboard.
+
+![beacon TUI](docs/screenshots/linux/tui.png)
+
+Every action is also a command that works inside any instance folder, like git:
 
 ```sh
 beacon new "My Pack" --mc 1.21.1 --loader fabric
@@ -103,6 +109,7 @@ beacon log | branch | switch | merge | restore | reset | discard
 beacon updates --apply          # newer Modrinth versions of your mods
 beacon upstream --pull          # merge the pack you forked from
 beacon publish v1.0 && beacon deploy
+beacon rollback v1.0            # save v1.0 as a new version, publish and deploy it
 beacon import --modrinth fabulously-optimized
 beacon export server ./server.zip
 ```
