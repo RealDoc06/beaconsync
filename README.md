@@ -21,6 +21,10 @@ Windows client, macOS client, Linux servers (systemd and Docker).
 | --- | --- | --- |
 | ![Toast](docs/screenshots/ingame/update-toast.jpg) | ![Pull](docs/screenshots/ingame/pull.jpg) | ![Deploy logs](docs/screenshots/server/deploy.png) |
 
+| Roll back for everyone | Servers rolling back |
+| --- | --- |
+| ![Rollback](docs/screenshots/linux/rollback.png) | ![Rollback servers](docs/screenshots/linux/rollback-servers.png) |
+
 More in [docs/screenshots](docs/screenshots).
 
 ## What it does
@@ -28,8 +32,8 @@ More in [docs/screenshots](docs/screenshots).
 - **Library like Prism Launcher.** Create packs (Vanilla, Fabric, Quilt, Forge, NeoForge), import
   `.mrpack`, CurseForge zips, Prism exports or existing Prism instances, browse Modrinth (and
   CurseForge with an API key). Instances live in Prism's folder, so Prism launches them.
-- **Versions like git.** See unsaved changes, undo them, save a version, view history, restore or
-  go back to any version, branches and merges. Mods are matched by project, so an updated mod shows
+- **Versions like git.** See unsaved changes, undo them, save a version, view history, roll back
+  to any version (for players and servers too: it is published and deployed), branches and merges. Mods are matched by project, so an updated mod shows
   as one change.
 - **Upstream.** Copy (fork) someone's pack or a Modrinth modpack and later pull their new versions
   into yours with a three-way merge. Your own changes stay. Update single mods to newer Modrinth
@@ -42,7 +46,8 @@ More in [docs/screenshots](docs/screenshots).
   update rolls back automatically.
 - **Players.** Friends join with a share code or link. The companion mod shows an in-game toast
   when an update is out, tells you if you match the server's version, and `/beacon pull` applies
-  configs and resource packs live (mods are staged for the next restart).
+  configs and resource packs live (mods are staged for the next restart). After a deploy players
+  rejoin by themselves: the update is pulled while the server restarts.
 
 ## Pieces
 
