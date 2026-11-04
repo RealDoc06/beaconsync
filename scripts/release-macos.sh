@@ -17,10 +17,8 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
 (cd apps/desktop && pnpm install --frozen-lockfile && pnpm tauri build --target universal-apple-darwin --bundles app,dmg)
 
 bundle=target/universal-apple-darwin/release/bundle
-dmg=$(ls "$bundle"/dmg/*.dmg | head -1)
-codesign --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$dmg"
+dmg=$(ls "$bundle"/dmg/*.dmg | head -1) # Tauri already signed the app and the dmg
 xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple "$dmg"
-xcrun stapler staple "$bundle/macos/BeaconSync.app"
 spctl --assess --type open --context context:primary-signature -v "$dmg"
 echo "$dmg"
