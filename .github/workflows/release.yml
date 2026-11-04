@@ -59,13 +59,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+  # The macOS app is signed and notarized on a Mac with scripts/release-macos.sh.
   desktop:
     needs: release
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-latest, args: "--target universal-apple-darwin" }
           - { os: windows-latest, args: "" }
           - { os: ubuntu-22.04, args: "" }
     runs-on: ${{ matrix.os }}
@@ -77,8 +77,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ startsWith(matrix.os, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
         with:
