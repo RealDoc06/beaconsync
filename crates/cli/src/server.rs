@@ -436,6 +436,7 @@ struct Mc {
 
 impl Mc {
     fn start(dir: &Path, cfg: &ServerConfig) -> Result<Self> {
+        srv::set_server_port(dir, cfg)?;
         let argv = cfg.argv();
         println!("[beacon] starting: {}", argv.join(" "));
         let mut cmd = Command::new(&argv[0]);

@@ -283,6 +283,29 @@ fn port_of(address: &str) -> u16 {
     address.rsplit_once(':').and_then(|(_, p)| p.parse().ok()).unwrap_or(25565)
 }
 
+/// Makes Minecraft listen on the port from the server's address (`server-port` in
+/// `server.properties`), so several servers fit on one machine and Docker's mapping matches.
+/// Called before every start; other properties are left alone.
+pub fn set_server_port(dir: &Path, cfg: &ServerConfig) -> Result<()> {
+    let path = dir.join("server.properties");
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    write_atomic(&path, with_port(&text, port_of(&cfg.address)).as_bytes())
+}
+
+fn with_port(properties: &str, port: u16) -> String {
+    let mut out: String =
+        properties.lines().filter(|l| !l.trim_start().starts_with("server-port=")).map(|l| format!("{l}\n")).collect();
+    out.push_str(&format!("server-port={port}\n"));
+    out
+}
+
+#[cfg(test)]
+#[test]
+fn server_port_is_replaced_and_other_properties_kept() {
+    assert_eq!(with_port("motd=hi\nserver-port=25565\npvp=true\n", 25566), "motd=hi\npvp=true\nserver-port=25566\n");
+    assert_eq!(with_port("", 25565), "server-port=25565\n");
+}
+
 /// docker compose file running `beacon server run` inside a Temurin image.
 /// The beacon binary is copied to `.beacon/bin/beacon` so the container runs the same agent.
 pub fn docker_compose(cfg: &ServerConfig, java_major: u32, user: Option<(u32, u32)>) -> String {
