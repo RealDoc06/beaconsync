@@ -804,8 +804,8 @@ async fn rollback(dir: &Path) -> Result<()> {
     let d = dir.to_path_buf();
     tokio::task::spawn_blocking(move || restore(&d)).await??;
     let cfg = ServerConfig::load(dir)?;
-    // Reported as failed so the hub doesn't immediately push the same release again.
-    report(&agent_hub(&cfg), None, "failed", format!("rolled back to {}", cfg.release_name.clone().unwrap_or_default()), cfg.commit.clone()).await;
+    // The hub won't push the rolled back deployment again until a new deploy.
+    report(&agent_hub(&cfg), None, "rolledback", format!("rolled back to {}", cfg.release_name.clone().unwrap_or_default()), cfg.commit.clone()).await;
     ui::ok(format!("Rolled back to {}. Start the server again.", cfg.release_name.unwrap_or_default()));
     Ok(())
 }

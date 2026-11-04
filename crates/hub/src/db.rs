@@ -85,9 +85,20 @@ create table if not exists library (
 );
 "#;
 
+/// Columns added after the first release; applied when missing.
+const MIGRATIONS: &[&str] = &["alter table servers add column failed_deployment text"];
+
 pub fn open(path: &std::path::Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.execute_batch(SCHEMA)?;
+    for m in MIGRATIONS {
+        match conn.execute(m, []) {
+            Err(rusqlite::Error::SqliteFailure(_, Some(msg))) if msg.contains("duplicate column") => {}
+            other => {
+                other?;
+            }
+        }
+    }
     Ok(conn)
 }
 

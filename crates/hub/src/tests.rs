@@ -95,3 +95,31 @@ async fn device_login() {
     assert_eq!(got.user.username, "doc");
     assert!(anon.device_poll(&start.device_code).await.is_err(), "codes are single use");
 }
+
+#[tokio::test]
+async fn rolled_back_deploys_are_not_resent() {
+    let (_tmp, base) = start().await;
+    let auth = Hub::new(&base, None).register(&Credentials { username: "doc".into(), password: "longpassword".into() }).await.unwrap();
+    let hub = Hub::new(&base, Some(auth.token));
+    let pack = hub
+        .create_pack(&NewPack { name: "Pack".into(), description: String::new(), minecraft: "1.21.1".into(), loader: Loader::default() })
+        .await
+        .unwrap();
+    let c1 = upload_commit(&hub, vec![], "one").await;
+    let r1 = hub.create_release(&pack.id, &NewRelease { commit: c1.clone(), name: "v1".into(), notes: String::new() }).await.unwrap();
+    let s = hub.create_server(&pack.id, &NewServer { name: "s".into(), mode: ServerMode::Service, address: "mc".into() }).await.unwrap();
+    let agent = Hub::new(&base, Some(s.token));
+    let deploy = |release: String| DeployRequest { release, servers: DeployTargets::All(AllServers::All) };
+    let report = |status: &str| AgentReport { deployment: None, status: status.into(), message: String::new(), commit: None };
+
+    hub.deploy(&pack.id, &deploy(r1.id.clone())).await.unwrap();
+    assert!(agent.agent_poll(0).await.unwrap().target.is_some());
+    agent.agent_report(&report("rolledback")).await.unwrap();
+    assert!(agent.agent_poll(0).await.unwrap().target.is_none());
+    // Restarting the supervisor reports "running"; the rolled back deploy must stay put.
+    agent.agent_report(&report("running")).await.unwrap();
+    assert!(agent.agent_poll(0).await.unwrap().target.is_none());
+    // A new deploy is offered again.
+    hub.deploy(&pack.id, &deploy(r1.id)).await.unwrap();
+    assert!(agent.agent_poll(0).await.unwrap().target.is_some());
+}

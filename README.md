@@ -6,11 +6,22 @@ game when a new version is out.
 
 > Alpha. Everything below works end to end, but expect rough edges. Please report bugs.
 
-![Library](docs/screenshots/library.png)
+Runs on **macOS, Windows and Linux**. Tested end to end with a real Minecraft 26.3 Fabric pack:
+Windows client, macOS client, Linux servers (systemd and Docker).
 
-| Mods | Changes | History |
+| Windows | macOS |
+| --- | --- |
+| ![Library on Windows](docs/screenshots/windows/library.png) | ![Library on macOS](docs/screenshots/macos/library.png) |
+
+| Changes | History and branches | Deploy |
 | --- | --- | --- |
-| ![Mods](docs/screenshots/instance-mods.png) | ![Changes](docs/screenshots/changes.png) | ![History](docs/screenshots/history.png) |
+| ![Changes](docs/screenshots/windows/changes.png) | ![History](docs/screenshots/windows/history.png) | ![Deploy](docs/screenshots/windows/deploy.png) |
+
+| In game: update available | In game: `/beacon pull` | Servers deploying 1.1 |
+| --- | --- | --- |
+| ![Toast](docs/screenshots/ingame/update-toast.jpg) | ![Pull](docs/screenshots/ingame/pull.jpg) | ![Deploy logs](docs/screenshots/server/deploy.png) |
+
+More in [docs/screenshots](docs/screenshots).
 
 ## What it does
 
@@ -67,6 +78,9 @@ curl -L -o beacon https://github.com/RealDoc06/beaconsync/releases/latest/downlo
 chmod +x beacon
 ./beacon login            # shows a code; approve it in the app (Settings > Approve a device) or at <hub>/device
 ./beacon server install   # pick the pack, then service / docker / plain
+./beacon server status    # version, backup, hub state
+./beacon server cmd whitelist add Steve   # console commands, also for services and containers
+./beacon server rollback  # back to the backup taken before the last update
 ```
 
 From now on, Deploy in the app updates the server.
@@ -105,7 +119,7 @@ cd mods/companion-fabric && ./gradlew build
 - Playing goes through [Prism Launcher](https://prismlauncher.org) (it handles Microsoft accounts
   and game files). BeaconSync instances are regular Prism instances with a `.beacon` folder.
 - CurseForge needs your own API key (Settings), because CurseForge requires one per app.
-- The in-game companion is Fabric only for now (Quilt loads it too).
+- The in-game companion is Fabric only for now (Quilt loads it too), built for 1.21.1 and 26.3.
 
 ## License
 

@@ -509,9 +509,11 @@ fn agent_state(s: &AppState, srv: &AuthServer) -> Result<(AgentPoll, bool)> {
     let db = s.db();
     db.execute("update servers set last_seen = ?1 where id = ?2", params![now(), srv.id])?;
     let server = db.query_row(&format!("select {SERVER_COLS} from servers where id = ?1"), params![srv.id], db::server_row)?;
-    let deployment: Option<String> = db.query_row("select deployment from servers where id = ?1", params![srv.id], |r| r.get(0))?;
+    let (deployment, failed): (Option<String>, Option<String>) =
+        db.query_row("select deployment, failed_deployment from servers where id = ?1", params![srv.id], |r| Ok((r.get(0)?, r.get(1)?)))?;
     let code: String = db.query_row("select code from packs where id = ?1", params![srv.pack_id], |r| r.get(0))?;
-    let pending = server.target_commit.is_some() && server.target_commit != server.current_commit && server.status != "failed";
+    // A deployment the server failed or rolled back is not offered again; a new deploy is.
+    let pending = server.target_commit.is_some() && server.target_commit != server.current_commit && deployment != failed;
     let target = match (pending, &server.target_commit, &server.target_release) {
         (true, Some(commit), Some(release)) => {
             let release_name: String = db.query_row("select name from releases where id = ?1", params![release], |r| r.get(0)).optional()?.unwrap_or_default();
@@ -543,12 +545,21 @@ async fn agent_poll(State(s): State<AppState>, srv: AuthServer, Query(q): Query<
 }
 
 async fn agent_report(State(s): State<AppState>, srv: AuthServer, Json(r): Json<AgentReport>) -> Result<Json<Value>> {
-    if !["idle", "applying", "done", "failed", "running", "stopped"].contains(&r.status.as_str()) {
+    if !["idle", "applying", "done", "failed", "running", "stopped", "rolledback"].contains(&r.status.as_str()) {
         return Err(Error::bad("unknown status"));
     }
     let db = s.db();
     let message: String = r.message.chars().take(500).collect();
     db.execute("update servers set status = ?1, message = ?2, last_seen = ?3 where id = ?4", params![r.status, message, now(), srv.id])?;
+    match (r.status.as_str(), &r.deployment) {
+        ("failed", Some(d)) => {
+            db.execute("update servers set failed_deployment = ?1 where id = ?2", params![d, srv.id])?;
+        }
+        ("rolledback", _) => {
+            db.execute("update servers set failed_deployment = deployment where id = ?1", params![srv.id])?;
+        }
+        _ => {}
+    }
     if let Some(c) = r.commit.filter(|c| hash::is_hash(c)) {
         db.execute("update servers set current_commit = ?1 where id = ?2", params![c, srv.id])?;
     }
