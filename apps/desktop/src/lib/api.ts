@@ -46,7 +46,7 @@ export interface Commands {
   switch_branch: Cmd<P<{ name: string }>, null>
   create_branch: Cmd<P<{ name: string }>, null>
   delete_branch: Cmd<P<{ name: string }>, null>
-  merge_branch: Cmd<P<{ name: string }>, T.Conflict[]>
+  merge_branch: Cmd<P<{ name: string }>, { conflicts: T.Conflict[]; fast_forward: boolean }>
   resolve_conflicts: Cmd<P<{ conflicts: T.Conflict[]; picks: [string, T.Pick][] }>, null>
   check_upstream: Cmd<P, T.UpstreamInfo>
   pull_upstream: Cmd<P, T.Conflict[]>

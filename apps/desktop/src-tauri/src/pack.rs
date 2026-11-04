@@ -292,9 +292,17 @@ pub async fn delete_branch(path: String, name: String) -> Res<()> {
 }
 
 /// Merges a branch into the current one. Returns conflicts for the user to pick.
+/// Result of merging a branch; `fast_forward` means nothing needs saving.
+#[derive(serde::Serialize)]
+pub struct Merged {
+    conflicts: Vec<Conflict>,
+    fast_forward: bool,
+}
+
 #[tauri::command]
-pub async fn merge_branch(app: AppHandle, path: String, name: String) -> Res<Vec<Conflict>> {
-    Ok(open(&path)?.merge(&name, &progress(&app)).await?.conflicts)
+pub async fn merge_branch(app: AppHandle, path: String, name: String) -> Res<Merged> {
+    let r = open(&path)?.merge(&name, &progress(&app)).await?;
+    Ok(Merged { conflicts: r.conflicts, fast_forward: r.fast_forward })
 }
 
 #[tauri::command]

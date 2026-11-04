@@ -141,7 +141,8 @@ function SubscribedBanner({ path }: { path: string }) {
   const release = useQuery({
     queryKey: [...keys.pack(path), 'release'],
     queryFn: () => call('check_release', { path }),
-    staleTime: 120_000,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   })
   const update = useAction(() => call('update_subscribed', { path }), {
     label: 'Updating',

@@ -66,6 +66,14 @@ pub enum ServerCmd {
     Status { path: Option<PathBuf> },
     /// Go back to the backup taken before the last update.
     Rollback { path: Option<PathBuf> },
+    /// Send a console command to a running server, e.g. `beacon server cmd whitelist add Steve`.
+    Cmd {
+        /// Server folder (defaults to the current folder).
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(required = true, trailing_var_arg = true)]
+        command: Vec<String>,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy)]
@@ -98,6 +106,7 @@ pub async fn run(cmd: ServerCmd, global_dir: Option<PathBuf>) -> Result<()> {
         ServerCmd::Update { path } => update_once(&pick(path)?).await,
         ServerCmd::Status { path } => status(&pick(path)?).await,
         ServerCmd::Rollback { path } => rollback(&pick(path)?).await,
+        ServerCmd::Cmd { path, command } => send_command(&pick(path)?, &command.join(" ")),
     }
 }
 
@@ -126,10 +135,6 @@ fn default_memory_mb() -> u32 {
     (half.clamp(2048, 8192) / 512) * 512
 }
 
-fn slug(s: &str) -> String {
-    let s: String = s.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect();
-    s.trim_matches('-').to_string()
-}
 
 fn agent_hub(cfg: &ServerConfig) -> Option<Hub> {
     Some(Hub::new(cfg.hub.as_deref()?, Some(cfg.token.clone()?)))
@@ -245,7 +250,7 @@ async fn install(a: InstallArgs) -> Result<()> {
     };
     let dir = match a.path {
         Some(p) => p,
-        None => PathBuf::from(ui::input("Install folder", Some(std::env::current_dir()?.join(slug(&pack.name)).to_string_lossy().into_owned()))?),
+        None => PathBuf::from(ui::input("Install folder", Some(std::env::current_dir()?.join(srv::slug(&name)).to_string_lossy().into_owned()))?),
     };
     let memory_mb = match a.memory {
         Some(m) => m,
@@ -381,7 +386,7 @@ fn setup_docker(cfg: &ServerConfig, tree: &Tree, dir: &Path, no_start: bool) -> 
         ui::ok("Container started (first start installs the loader, give it a minute)");
     }
     println!("  Logs:     docker compose -f {} logs -f", dir.join("docker-compose.yml").display());
-    println!("  Console:  docker attach beacon-{}", slug(&cfg.name));
+    println!("  Console:  docker attach beacon-{}", srv::slug(&cfg.name));
     Ok(())
 }
 
@@ -490,6 +495,55 @@ async fn agent_loop(hub: Hub, tx: mpsc::Sender<AgentTarget>) {
     }
 }
 
+fn console_path(dir: &Path) -> PathBuf {
+    dir.join(".beacon/console")
+}
+
+/// Named pipe at `.beacon/console`: lines written to it go to the Minecraft console, so
+/// `beacon server cmd` works for services and containers that have no terminal.
+#[cfg(unix)]
+fn console_pipe(dir: &Path, tx: mpsc::Sender<String>) -> Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let path = console_path(dir);
+    fs::remove_file(&path).ok();
+    let c = CString::new(path.as_os_str().as_bytes())?;
+    if unsafe { libc::mkfifo(c.as_ptr(), 0o600) } != 0 {
+        bail!("cannot create console pipe: {}", std::io::Error::last_os_error());
+    }
+    std::thread::spawn(move || {
+        loop {
+            // Blocks until a writer connects; reopen after each writer closes.
+            let Ok(f) = fs::File::open(&path) else { return };
+            for line in std::io::BufRead::lines(std::io::BufReader::new(f)).map_while(Result::ok) {
+                if tx.blocking_send(line).is_err() {
+                    return;
+                }
+            }
+        }
+    });
+    Ok(())
+}
+
+fn send_command(dir: &Path, command: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::{io::Write, os::unix::fs::OpenOptionsExt};
+        let mut pipe = fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(console_path(dir))
+            .context("the server is not running under `beacon server run`")?;
+        writeln!(pipe, "{command}")?;
+        ui::ok(format!("Sent `{command}`. Output is in the server log."));
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (dir, command);
+        bail!("console commands need a Linux or macOS server")
+    }
+}
+
 async fn stdin_loop(tx: mpsc::Sender<String>) {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
@@ -520,6 +574,8 @@ async fn supervise(dir: PathBuf) -> Result<()> {
         tokio::spawn(agent_loop(h, tx_target));
     }
     let (tx_in, mut console) = mpsc::channel(16);
+    #[cfg(unix)]
+    console_pipe(&dir, tx_in.clone())?;
     tokio::spawn(stdin_loop(tx_in));
     #[cfg(unix)]
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
@@ -710,7 +766,21 @@ async fn status(dir: &Path) -> Result<()> {
     if let Some((mc, l)) = &cfg.installed {
         println!("  Minecraft {mc} {} {}", l.kind.label(), l.version.as_deref().unwrap_or(""));
     }
-    println!("  Running   {}", if running_pid(dir).is_some() { "yes" } else { "no (or not supervised)" });
+    let running = if cfg.mode == ServerMode::Docker {
+        // The supervisor lives inside the container, so ask docker.
+        let name = format!("beacon-{}", srv::slug(&cfg.name));
+        std::process::Command::new("docker")
+            .args(["inspect", "-f", "{{.State.Status}}", &name])
+            .output()
+            .ok()
+            .map(|o| format!("{} (container {name})", String::from_utf8_lossy(&o.stdout).trim()))
+            .unwrap_or_else(|| "unknown (docker not available)".into())
+    } else if running_pid(dir).is_some() {
+        "yes".into()
+    } else {
+        "no (or not supervised)".into()
+    };
+    println!("  Running   {running}");
     println!("  Backup    {}", if backup_path(dir).is_file() { "yes" } else { "none yet" });
     if let Some(hub) = agent_hub(&cfg) {
         match hub.agent_poll(0).await {

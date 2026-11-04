@@ -115,8 +115,8 @@ function Branches({ path, h }: { path: string; h: History }) {
   const merge = useAction((name: string) => call('merge_branch', { path, name }), {
     label: 'Merging',
     invalidate: packKeys(path),
-    done: (c) => (c.length ? null : `Merged ${from}. Save a version to finish.`),
-    onSuccess: (conflicts) => conflicts.length && set({ conflicts: { path, items: conflicts } }),
+    done: (r) => (r.fast_forward ? `Moved ${current} forward to ${from}` : r.conflicts.length ? null : `Merged ${from}. Save a version to finish.`),
+    onSuccess: (r) => r.conflicts.length && set({ conflicts: { path, items: r.conflicts } }),
   })
   const remove = useAction((name: string) => call('delete_branch', { path, name }), {
     label: 'Deleting branch',

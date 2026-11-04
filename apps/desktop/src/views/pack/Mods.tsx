@@ -182,7 +182,9 @@ function UpstreamLine({ path, name }: { path: string; name: string }) {
   const info = useQuery({
     queryKey: [...keys.pack(path), 'upstream'],
     queryFn: () => call('check_upstream', { path }),
-    staleTime: 300_000,
+    // Upstream releases should show up within a minute without a restart.
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   })
   const pull = useAction(() => call('pull_upstream', { path }), {
     label: `Getting updates from ${name}`,
