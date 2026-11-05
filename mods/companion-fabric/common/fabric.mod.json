@@ -5,6 +5,7 @@
   "name": "BeaconSync Companion",
   "description": "In-game BeaconSync update notifications, server version checks and hot pull.",
   "license": "MIT",
+  "icon": "assets/beaconsync-companion/icon.png",
   "environment": "client",
   "entrypoints": {
     "client": ["dev.beaconsync.companion.BeaconCompanion"]

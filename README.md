@@ -1,3 +1,5 @@
+<img src="docs/brand/logo.png" width="96" alt="BeaconSync logo">
+
 # BeaconSync
 
 Git-like modpack manager for Minecraft. Build a pack, save versions, branch, roll back, publish,

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { listen } from '@tauri-apps/api/event'
 import { useEffect } from 'react'
+import logo from './assets/logo.svg'
 import { Conflicts } from './components/Conflicts'
 import { Button, Dialog, ProgressBar } from './components/ui'
 import { call } from './lib/api'
@@ -73,7 +74,7 @@ function Sidebar() {
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-line">
       <div className="flex h-12 items-center gap-2 px-4">
-        <BeaconMark />
+        <img src={logo} alt="" className="size-6" />
         <span className="font-semibold tracking-tight">BeaconSync</span>
       </div>
       <nav className="flex flex-col gap-0.5 px-2">
@@ -110,16 +111,6 @@ function Sidebar() {
         )}
       </div>
     </aside>
-  )
-}
-
-function BeaconMark() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-5" aria-hidden>
-      <rect x="10.5" y="2" width="3" height="12" fill="#e6fbff" />
-      <rect x="7" y="14" width="10" height="3" rx="0.5" fill="#7ee8ff" />
-      <rect x="5" y="17.5" width="14" height="3" rx="0.5" fill="#fff" />
-    </svg>
   )
 }
 
