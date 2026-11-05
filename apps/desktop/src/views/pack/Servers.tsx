@@ -6,12 +6,14 @@ import { call } from '../../lib/api'
 import { ago, shortId } from '../../lib/format'
 import { keys, packKeys, useAction } from '../../lib/store'
 import type { PackInfo, Release, Server } from '../../lib/types'
+import { ServerPanel } from './ServerPanel'
 
 export function ServersTab({ p }: { p: PackInfo }) {
   const path = p.path
   const published = !!p.config.remote
   const [publishing, setPublishing] = useState(false)
   const [deploying, setDeploying] = useState(false)
+  const [open, setOpen] = useState<string | null>(null)
 
   const servers = useQuery({
     queryKey: [...keys.pack(path), 'servers'],
@@ -29,6 +31,8 @@ export function ServersTab({ p }: { p: PackInfo }) {
     if (out) exportPack.mutate(out)
   }
   const releaseName = (commit: string | null) => (commit ? (releases.data?.find((r) => r.commit === commit)?.name ?? shortId(commit)) : 'Nothing yet')
+  const opened = servers.data?.find((s) => s.id === open)
+  if (opened) return <ServerPanel path={path} server={opened} version={releaseName(opened.current_commit)} onBack={() => setOpen(null)} />
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
@@ -50,7 +54,13 @@ export function ServersTab({ p }: { p: PackInfo }) {
         <ErrorLine error={servers.error} />
         {published && servers.data?.length === 0 && <Empty>No servers yet. Install one with the steps below.</Empty>}
         {servers.data?.map((s) => (
-          <ServerRow key={s.id} s={s} version={releaseName(s.current_commit)} target={releaseName(s.target_commit)} />
+          <ServerRow
+            key={s.id}
+            s={s}
+            version={releaseName(s.current_commit)}
+            target={releaseName(s.target_commit)}
+            onOpen={() => setOpen(s.id)}
+          />
         ))}
       </div>
 
@@ -73,11 +83,16 @@ export function ServersTab({ p }: { p: PackInfo }) {
   )
 }
 
-function ServerRow({ s, version, target }: { s: Server; version: string; target: string }) {
+function ServerRow({ s, version, target, onOpen }: { s: Server; version: string; target: string; onOpen: () => void }) {
   const pending = s.target_commit && s.target_commit !== s.current_commit
-  const tone = s.status === 'failed' ? 'text-bad' : s.status === 'applying' || pending ? 'text-warn' : 'text-muted'
+  const tone = s.status === 'failed' ? 'text-bad' : s.status === 'applying' || s.status === 'stopped' || pending ? 'text-warn' : 'text-muted'
   return (
-    <div className="grid h-12 grid-cols-[minmax(0,1fr)_minmax(0,180px)_160px_minmax(0,1fr)] items-center gap-3 border-b border-line px-5">
+    <button
+      type="button"
+      onClick={onOpen}
+      title="Console and backups"
+      className="grid h-12 w-full grid-cols-[minmax(0,1fr)_minmax(0,180px)_160px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line px-5 text-left hover:bg-hover"
+    >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className={s.online ? 'text-ok' : 'text-[#444]'}>●</span>
@@ -96,7 +111,8 @@ function ServerRow({ s, version, target }: { s: Server; version: string; target:
       <span className="truncate text-xs text-muted" title={s.message}>
         {s.message}
       </span>
-    </div>
+      <span className="text-xs text-muted">Console and backups ›</span>
+    </button>
   )
 }
 

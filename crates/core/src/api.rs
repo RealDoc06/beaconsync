@@ -203,6 +203,60 @@ pub struct AgentPoll {
     /// Hub's idea of the server; lets the agent show its own name.
     pub server: Server,
     pub pack_code: String,
+    /// Things the owner asked for from the app or CLI, oldest first.
+    #[serde(default)]
+    pub actions: Vec<ServerAction>,
+}
+
+/// What an owner can ask a running server to do. Relayed by the hub to the agent.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", content = "arg", rename_all = "snake_case")]
+pub enum ServerAction {
+    /// A Minecraft console command, e.g. `whitelist add Steve`.
+    Command(String),
+    Start,
+    Stop,
+    Restart,
+    /// Back up the whole server now.
+    Backup,
+    /// Restore a backup by id (stops and restarts Minecraft).
+    Restore(String),
+    DeleteBackup(String),
+}
+
+/// A backup on a server: BeaconSync's own or one written by a backup mod (FTB Backups...).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Backup {
+    /// Path relative to the server folder.
+    pub id: String,
+    /// "BeaconSync" or the backup mod's name.
+    pub source: String,
+    /// What it was taken for, e.g. "before 1.4" or "manual".
+    pub note: String,
+    pub size: u64,
+    pub created: i64,
+    /// True for whole server backups; false when the archive only holds the world.
+    pub full: bool,
+}
+
+/// Console output and state an agent uploads.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AgentConsole {
+    pub lines: Vec<String>,
+    /// Sent when the list changed (and on start).
+    pub backups: Option<Vec<Backup>>,
+    /// Whether Minecraft is running, when it changed.
+    pub running: Option<bool>,
+}
+
+/// A slice of a server's console for viewers. `next` is the cursor for the next call.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ConsoleView {
+    pub lines: Vec<String>,
+    pub next: u64,
+    pub backups: Vec<Backup>,
+    pub online: bool,
+    pub running: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

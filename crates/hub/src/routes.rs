@@ -33,8 +33,26 @@ pub struct Inner {
     db: Mutex<Connection>,
     store: ObjectStore,
     pub config: Config,
-    /// Wakes long polling agents when they get a new deployment.
+    /// Wakes long polling agents when they get a new deployment or action.
     waiters: Mutex<HashMap<String, Arc<Notify>>>,
+    /// Live console and backups per server, kept in memory only.
+    consoles: Mutex<HashMap<String, Console>>,
+}
+
+/// Lines kept per server for viewers that open the console later.
+const CONSOLE_LINES: usize = 2000;
+
+/// A server's recent console output, backups and queued actions.
+#[derive(Default)]
+struct Console {
+    lines: std::collections::VecDeque<String>,
+    /// Cursor of the line after the last one (lines.back() is `end - 1`).
+    end: u64,
+    backups: Vec<Backup>,
+    running: bool,
+    actions: Vec<ServerAction>,
+    /// Wakes viewers waiting for new lines.
+    changed: Arc<Notify>,
 }
 
 impl std::ops::Deref for AppState {
@@ -49,7 +67,7 @@ impl AppState {
         std::fs::create_dir_all(&config.data)?;
         let db = db::open(&config.data.join("hub.db"))?;
         let store = ObjectStore::new(config.data.join("objects"));
-        Ok(Self(Arc::new(Inner { db: Mutex::new(db), store, config, waiters: Mutex::default() })))
+        Ok(Self(Arc::new(Inner { db: Mutex::new(db), store, config, waiters: Mutex::default(), consoles: Mutex::default() })))
     }
 
     pub fn db(&self) -> MutexGuard<'_, Connection> {
@@ -58,6 +76,11 @@ impl AppState {
 
     fn waiter(&self, server: &str) -> Arc<Notify> {
         self.waiters.lock().unwrap_or_else(|e| e.into_inner()).entry(server.to_string()).or_default().clone()
+    }
+
+    /// Runs `f` on a server's console state.
+    fn console<T>(&self, server: &str, f: impl FnOnce(&mut Console) -> T) -> T {
+        f(self.consoles.lock().unwrap_or_else(|e| e.into_inner()).entry(server.to_string()).or_default())
     }
 
     pub fn public_url(&self) -> String {
@@ -93,6 +116,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/objects/{hash}", get(get_object).put(put_object).layer(DefaultBodyLimit::max(max)))
         .route("/api/agent/poll", get(agent_poll))
         .route("/api/agent/report", post(agent_report))
+        .route("/api/agent/console", post(agent_console))
+        .route("/api/servers/{sid}/console", get(server_console))
+        .route("/api/servers/{sid}/actions", post(server_action))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -567,9 +593,11 @@ async fn get_object(State(s): State<AppState>, Path(id): Path<String>) -> Result
 #[derive(Deserialize)]
 struct PollQuery {
     wait: Option<u64>,
+    /// Deployment the agent is already applying; not a reason to return early.
+    known: Option<String>,
 }
 
-fn agent_state(s: &AppState, srv: &AuthServer) -> Result<(AgentPoll, bool)> {
+fn agent_state(s: &AppState, srv: &AuthServer, known: Option<&str>) -> Result<(AgentPoll, bool)> {
     let db = s.db();
     db.execute("update servers set last_seen = ?1 where id = ?2", params![now(), srv.id])?;
     let server = db.query_row(&format!("select {SERVER_COLS} from servers where id = ?1"), params![srv.id], db::server_row)?;
@@ -595,8 +623,10 @@ fn agent_state(s: &AppState, srv: &AuthServer) -> Result<(AgentPoll, bool)> {
         }
         _ => None,
     };
-    let has = target.is_some();
-    Ok((AgentPoll { target, server, pack_code: code }, has))
+    drop(db);
+    let actions = s.console(&srv.id, |c| std::mem::take(&mut c.actions));
+    let has = target.as_ref().is_some_and(|t| Some(t.deployment.as_str()) != known) || !actions.is_empty();
+    Ok((AgentPoll { target, server, pack_code: code, actions }, has))
 }
 
 async fn agent_poll(State(s): State<AppState>, srv: AuthServer, Query(q): Query<PollQuery>) -> Result<Json<AgentPoll>> {
@@ -607,7 +637,7 @@ async fn agent_poll(State(s): State<AppState>, srv: AuthServer, Query(q): Query<
         let notified = notify.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
-        let (poll, has_target) = agent_state(&s, &srv)?;
+        let (poll, has_target) = agent_state(&s, &srv, q.known.as_deref())?;
         if has_target || tokio::time::Instant::now() >= deadline {
             return Ok(Json(poll));
         }
@@ -640,5 +670,100 @@ async fn agent_report(State(s): State<AppState>, srv: AuthServer, Json(r): Json<
     if let Some(c) = r.commit.filter(|c| hash::is_hash(c)) {
         db.execute("update servers set current_commit = ?1 where id = ?2", params![c, srv.id])?;
     }
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn agent_console(State(s): State<AppState>, srv: AuthServer, Json(c): Json<AgentConsole>) -> Result<Json<Value>> {
+    s.db().execute("update servers set last_seen = ?1 where id = ?2", params![now(), srv.id])?;
+    s.console(&srv.id, |con| {
+        for line in c.lines {
+            con.lines.push_back(line.chars().take(4000).collect());
+            con.end += 1;
+        }
+        while con.lines.len() > CONSOLE_LINES {
+            con.lines.pop_front();
+        }
+        if let Some(b) = c.backups {
+            con.backups = b;
+        }
+        if let Some(r) = c.running {
+            con.running = r;
+        }
+        con.changed.notify_waiters();
+    });
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// The server, if `u` owns its pack.
+fn owned_server(s: &AppState, u: &AuthUser, sid: &str) -> Result<Server> {
+    let db = s.db();
+    let owner: Option<String> = db
+        .query_row("select p.owner_id from servers s join packs p on p.id = s.pack_id where s.id = ?1", params![sid], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if owner.as_deref() != Some(u.id.as_str()) {
+        return Err(Error::not_found("server"));
+    }
+    Ok(db.query_row(&format!("select {SERVER_COLS} from servers where id = ?1"), params![sid], db::server_row)?)
+}
+
+#[derive(Deserialize)]
+struct ConsoleQuery {
+    after: Option<u64>,
+    wait: Option<u64>,
+}
+
+/// Lines a viewer that first opens the console sees.
+const CONSOLE_TAIL: u64 = 500;
+
+async fn server_console(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path(sid): Path<String>,
+    Query(q): Query<ConsoleQuery>,
+) -> Result<Json<ConsoleView>> {
+    let online = owned_server(&s, &u, &sid)?.online;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(q.wait.unwrap_or(0).min(30));
+    let changed = s.console(&sid, |c| c.changed.clone());
+    loop {
+        // Armed before reading, so a line arriving in between still wakes us.
+        let notified = changed.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let (view, fresh) = s.console(&sid, |c| {
+            let start = c.end - c.lines.len() as u64;
+            // No cursor, or one from before a hub restart: start from the tail.
+            let fresh = q.after.is_none_or(|a| a > c.end);
+            let from = if fresh { c.end.saturating_sub(CONSOLE_TAIL) } else { q.after.unwrap_or(0) }.max(start);
+            let lines = c.lines.iter().skip((from - start) as usize).cloned().collect();
+            (ConsoleView { lines, next: c.end, backups: c.backups.clone(), online, running: c.running && online }, fresh)
+        });
+        if !view.lines.is_empty() || fresh || tokio::time::Instant::now() >= deadline {
+            return Ok(Json(view));
+        }
+        tokio::select! {
+            _ = &mut notified => {}
+            _ = tokio::time::sleep_until(deadline) => return Ok(Json(view)),
+        }
+    }
+}
+
+async fn server_action(
+    State(s): State<AppState>,
+    u: AuthUser,
+    Path(sid): Path<String>,
+    Json(a): Json<ServerAction>,
+) -> Result<Json<Value>> {
+    if !owned_server(&s, &u, &sid)?.online {
+        return Err(Error::bad("the server is offline"));
+    }
+    if let ServerAction::Command(c) = &a
+        && (c.trim().is_empty() || c.contains('\n'))
+    {
+        return Err(Error::bad("send one command per line"));
+    }
+    s.console(&sid, |c| c.actions.push(a));
+    s.waiter(&sid).notify_waiters();
     Ok(Json(json!({ "ok": true })))
 }

@@ -25,6 +25,10 @@ Windows client, macOS client, Linux servers (systemd and Docker).
 | --- | --- |
 | ![Rollback](docs/screenshots/linux/rollback.png) | ![Rollback servers](docs/screenshots/linux/rollback-servers.png) |
 
+| Server console | Server backups (yours and mods') | Console in the terminal |
+| --- | --- | --- |
+| ![Console](docs/screenshots/linux/server-console.png) | ![Backups](docs/screenshots/linux/server-backups.png) | ![TUI console](docs/screenshots/linux/tui-server.png) |
+
 More in [docs/screenshots](docs/screenshots).
 
 ## What it does
@@ -42,8 +46,11 @@ More in [docs/screenshots](docs/screenshots).
   `beacon server install`: as a systemd **service** (boot start, crash restart, auto update), a
   **docker** container, or a **plain** folder with `start.sh`. Java and the loader are installed for you.
 - **Deploys.** Publish a release from the app and deploy it to one, several or all servers. Each
-  server warns players, stops cleanly, keeps one backup, updates, restarts and reports back. A failed
+  server warns players, stops cleanly, backs up, updates, restarts and reports back. A failed
   update rolls back automatically.
+- **Server management.** From the app or the CLI, on any machine: watch the live console and send
+  commands, start, stop and restart, and back up, restore or delete backups. Backups made by mods
+  like FTB Backups or Simple Backups show up next to BeaconSync's own.
 - **Players.** Friends join with a share code or link. The companion mod shows an in-game toast
   when an update is out, tells you if you match the server's version, and `/beacon pull` applies
   configs and resource packs live (mods are staged for the next restart). After a deploy players
@@ -83,12 +90,22 @@ curl -L -o beacon https://github.com/RealDoc06/beaconsync/releases/latest/downlo
 chmod +x beacon
 ./beacon login            # shows a code; approve it in the app (Settings > Approve a device) or at <hub>/device
 ./beacon server install   # pick the pack, then service / docker / plain
-./beacon server status    # version, backup, hub state
-./beacon server cmd whitelist add Steve   # console commands, also for services and containers
-./beacon server rollback  # back to the backup taken before the last update
+./beacon server status    # version, backups, hub state
 ```
 
-From now on, Deploy in the app updates the server.
+From now on, Deploy in the app updates the server. Manage it from the app (Servers › a server)
+or from the CLI on any machine you are signed in on:
+
+```sh
+beacon server console -s Survival            # live console, type commands; tab for backups
+beacon server cmd -s Survival whitelist add Steve
+beacon server backups -s Survival            # BeaconSync's and backup mods' (FTB Backups, Simple Backups...)
+beacon server backups -s Survival create | restore <id> | delete <id>
+beacon server stop | start | restart -s Survival
+beacon server rollback    # on the server, while it's stopped: back to the newest backup
+```
+
+Inside a server folder `-s` can be left out.
 
 ### CLI for pack authors
 

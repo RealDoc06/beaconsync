@@ -74,6 +74,8 @@ fn main() {
             hub::releases,
             hub::servers,
             hub::deploy,
+            hub::server_console,
+            hub::server_action,
             hub::export_server_pack,
         ])
         .run(tauri::generate_context!())

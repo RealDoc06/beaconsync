@@ -5,6 +5,8 @@
 //! `beacon server ...` installs and runs auto-updating Minecraft servers.
 
 mod account;
+mod backups;
+mod console;
 mod pack;
 mod server;
 mod tui;

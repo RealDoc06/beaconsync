@@ -3,7 +3,7 @@
 use crate::util::{Res, blocking, open, progress};
 use anyhow::{Context, anyhow};
 use beacon_core::{
-    api::{AllServers, Credentials, DeployRequest, DeployResponse, DeployTargets, Release, Server},
+    api::{AllServers, ConsoleView, Credentials, DeployRequest, DeployResponse, DeployTargets, Release, Server, ServerAction},
     hub::Hub,
     instance, ops, server,
     settings::Settings,
@@ -124,6 +124,21 @@ pub async fn releases(path: String) -> Res<Vec<Release>> {
 pub async fn servers(path: String) -> Res<Vec<Server>> {
     let (hub, pack) = hub_and_pack(&path)?;
     Ok(hub.servers(&pack).await?)
+}
+
+/// A server's console after `after` (its last lines when null), waiting up to 20s for new ones.
+#[tauri::command]
+pub async fn server_console(path: String, server: String, after: Option<u64>) -> Res<ConsoleView> {
+    let (hub, _) = hub_and_pack(&path)?;
+    Ok(hub.console(&server, after, if after.is_some() { 20 } else { 0 }).await?)
+}
+
+/// Sends a console command, start/stop/restart or a backup action to a server.
+#[tauri::command]
+pub async fn server_action(path: String, server: String, action: ServerAction) -> Res<()> {
+    let (hub, _) = hub_and_pack(&path)?;
+    hub.server_action(&server, &action).await?;
+    Ok(())
 }
 
 /// Deploys a release to the given servers, or to all of them when `servers` is null.

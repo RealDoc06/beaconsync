@@ -2,12 +2,16 @@
 //!
 //! `beacon server run` is the heart of service and docker modes: it runs Minecraft as a child
 //! process, restarts it when it crashes, long polls the hub and applies new releases
-//! (announce, stop, back up, update, restart, report).
+//! (announce, stop, back up, update, restart, report). It also streams the console to the hub
+//! and carries out owner actions (commands, start/stop, backups) sent from the app or CLI.
 
-use crate::ui::{self, Bar};
+use crate::{
+    backups,
+    ui::{self, Bar},
+};
 use anyhow::{Context, Result, bail};
 use beacon_core::{
-    api::{AgentReport, AgentTarget, NewServer, ServerMode},
+    api::{AgentConsole, AgentReport, AgentTarget, NewServer, Server, ServerAction, ServerMode},
     fetch::{Fetcher, Progress},
     hash::short,
     hub::Hub,
@@ -22,6 +26,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Stdio,
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 use tokio::{
@@ -64,15 +69,64 @@ pub enum ServerCmd {
     Update { path: Option<PathBuf> },
     /// Show what this server is running.
     Status { path: Option<PathBuf> },
-    /// Go back to the backup taken before the last update.
+    /// Go back to the newest backup while the server is stopped (e.g. after a bad update).
     Rollback { path: Option<PathBuf> },
-    /// Send a console command to a running server, e.g. `beacon server cmd whitelist add Steve`.
+    /// Watch the live console and type commands. Works from any machine you are signed in on.
+    Console {
+        #[command(flatten)]
+        target: Target,
+    },
+    /// Send one console command, e.g. `beacon server cmd whitelist add Steve`.
     Cmd {
-        /// Server folder (defaults to the current folder).
-        #[arg(long)]
-        path: Option<PathBuf>,
+        #[command(flatten)]
+        target: Target,
         #[arg(required = true, trailing_var_arg = true)]
         command: Vec<String>,
+    },
+    /// List backups (yours and backup mods' like FTB Backups), or create, restore and delete them.
+    Backups {
+        #[command(flatten)]
+        target: Target,
+        #[command(subcommand)]
+        action: Option<BackupCmd>,
+    },
+    /// Start Minecraft after `beacon server stop`.
+    Start {
+        #[command(flatten)]
+        target: Target,
+    },
+    /// Stop Minecraft, keeping the server connected so you can start it again.
+    Stop {
+        #[command(flatten)]
+        target: Target,
+    },
+    Restart {
+        #[command(flatten)]
+        target: Target,
+    },
+}
+
+/// Which server to manage.
+#[derive(clap::Args)]
+pub struct Target {
+    /// Server name or id, any of your servers. Defaults to the server in the current folder.
+    #[arg(short, long)]
+    pub server: Option<String>,
+    /// Server folder, instead of the current one.
+    #[arg(long)]
+    pub path: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+pub enum BackupCmd {
+    /// Back up the whole server now (worlds included).
+    Create,
+    /// Restore a backup by id. Minecraft restarts; a safety backup is taken first.
+    Restore {
+        id: String,
+    },
+    Delete {
+        id: String,
     },
 }
 
@@ -106,13 +160,33 @@ pub async fn run(cmd: ServerCmd, global_dir: Option<PathBuf>) -> Result<()> {
         ServerCmd::Update { path } => update_once(&pick(path)?).await,
         ServerCmd::Status { path } => status(&pick(path)?).await,
         ServerCmd::Rollback { path } => rollback(&pick(path)?).await,
-        ServerCmd::Cmd { path, command } => send_command(&pick(path)?, &command.join(" ")),
+        ServerCmd::Console { target } => {
+            let (hub, server, version) = remote(target, global_dir.clone()).await?;
+            crate::tui::run_server(hub, server, version).await
+        }
+        ServerCmd::Cmd { target, command } => {
+            let command = command.join(" ");
+            // On the server machine the console pipe works without the hub.
+            if target.server.is_none() && send_local(&pick(target.path.clone())?, &command) {
+                ui::ok(format!("Sent `{command}`. See the output with `beacon server console`."));
+                return Ok(());
+            }
+            act_remote(target, global_dir.clone(), ServerAction::Command(command), &[]).await
+        }
+        ServerCmd::Backups { target, action } => backups_cmd(target, global_dir.clone(), action).await,
+        ServerCmd::Start { target } => {
+            act_remote(target, global_dir.clone(), ServerAction::Start, &["starting:", "already running"]).await
+        }
+        ServerCmd::Stop { target } => {
+            act_remote(target, global_dir.clone(), ServerAction::Stop, &["Minecraft stopped", "not running"]).await
+        }
+        ServerCmd::Restart { target } => act_remote(target, global_dir.clone(), ServerAction::Restart, &["starting:"]).await,
     }
 }
 
 fn log_progress(p: Progress) {
     if p.done == p.total || p.total <= 1 {
-        println!("[beacon] {} ({}/{})", p.label, p.done, p.total);
+        say(format!("{} ({}/{})", p.label, p.done, p.total));
     }
 }
 
@@ -391,6 +465,70 @@ fn setup_docker(cfg: &ServerConfig, tree: &Tree, dir: &Path, no_start: bool) -> 
 
 // ---- supervisor ---------------------------------------------------------------------------
 
+/// Console output of the supervised server, uploaded to the hub so owners can watch it.
+static CONSOLE: OnceLock<mpsc::UnboundedSender<String>> = OnceLock::new();
+
+/// Prints a console line (journal and docker logs keep working) and uploads it.
+fn out(line: String) {
+    println!("{line}");
+    if let Some(tx) = CONSOLE.get() {
+        tx.send(line).ok();
+    }
+}
+
+/// A supervisor message, shown in the console with a `[beacon]` prefix.
+fn say(msg: impl std::fmt::Display) {
+    out(format!("[beacon] {msg}"));
+}
+
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip a CSI sequence: ESC [ params final-byte.
+            if chars.next() == Some('[') {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Sends console lines to the hub in small batches.
+async fn uploader(hub: Hub, mut rx: mpsc::UnboundedReceiver<String>) {
+    while let Some(first) = rx.recv().await {
+        let mut lines = vec![strip_ansi(&first)];
+        let until = tokio::time::Instant::now() + Duration::from_millis(250);
+        while lines.len() < 500 {
+            match tokio::time::timeout_at(until, rx.recv()).await {
+                Ok(Some(l)) => lines.push(strip_ansi(&l)),
+                _ => break,
+            }
+        }
+        if let Err(e) = hub.agent_console(&AgentConsole { lines, ..Default::default() }).await {
+            tracing::warn!("console upload failed: {e:#}");
+        }
+    }
+}
+
+/// Tells the hub whether Minecraft runs and which backups exist.
+async fn push_state(hub: &Option<Hub>, dir: &Path, running: bool) {
+    let Some(h) = hub else { return };
+    let d = dir.to_path_buf();
+    let backups = tokio::task::spawn_blocking(move || backups::list(&d)).await.unwrap_or_default();
+    let c = AgentConsole { lines: vec![], backups: Some(backups), running: Some(running) };
+    if let Err(e) = h.agent_console(&c).await {
+        tracing::warn!("state upload failed: {e:#}");
+    }
+}
+
 /// Pid file preventing two supervisors (or a supervisor and `update`) on one server.
 struct RunLock(PathBuf);
 
@@ -434,17 +572,33 @@ struct Mc {
     stdin: Option<tokio::process::ChildStdin>,
 }
 
+/// Forwards every line Minecraft prints to [`out`].
+fn pump(r: impl tokio::io::AsyncRead + Unpin + Send + 'static) {
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(r).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            out(line);
+        }
+    });
+}
+
 impl Mc {
     fn start(dir: &Path, cfg: &ServerConfig) -> Result<Self> {
         srv::set_server_port(dir, cfg)?;
         let argv = cfg.argv();
-        println!("[beacon] starting: {}", argv.join(" "));
+        say(format!("starting: {}", argv.join(" ")));
         let mut cmd = Command::new(&argv[0]);
-        cmd.args(&argv[1..]).current_dir(dir).stdin(Stdio::piped()).stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        cmd.args(&argv[1..]).current_dir(dir).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         // Own process group so Ctrl+C reaches us, and we stop Minecraft cleanly.
         #[cfg(unix)]
         cmd.process_group(0);
         let mut child = cmd.spawn().context("starting Minecraft")?;
+        if let Some(o) = child.stdout.take() {
+            pump(o);
+        }
+        if let Some(e) = child.stderr.take() {
+            pump(e);
+        }
         let stdin = child.stdin.take();
         Ok(Self { child, stdin })
     }
@@ -460,7 +614,7 @@ impl Mc {
     async fn stop(mut self) {
         self.send("stop").await;
         if tokio::time::timeout(Duration::from_secs(90), self.child.wait()).await.is_err() {
-            println!("[beacon] Minecraft did not stop in 90s, killing it");
+            say("Minecraft did not stop in 90s, killing it");
             self.child.kill().await.ok();
         }
     }
@@ -473,16 +627,22 @@ async fn wait_exit(mc: &mut Option<Mc>) -> std::io::Result<std::process::ExitSta
     }
 }
 
-async fn agent_loop(hub: Hub, tx: mpsc::Sender<AgentTarget>) {
+/// Long polls the hub for deployments and owner actions.
+async fn agent_loop(hub: Hub, targets: mpsc::Sender<AgentTarget>, actions: mpsc::Sender<ServerAction>) {
     let mut last: Option<String> = None;
     loop {
-        match hub.agent_poll(25).await {
+        match hub.agent_poll(25, last.as_deref()).await {
             Ok(p) => {
+                for a in p.actions {
+                    if actions.send(a).await.is_err() {
+                        return;
+                    }
+                }
                 if let Some(t) = p.target
                     && last.as_ref() != Some(&t.deployment)
                 {
                     last = Some(t.deployment.clone());
-                    if tx.send(t).await.is_err() {
+                    if targets.send(t).await.is_err() {
                         return;
                     }
                 }
@@ -524,23 +684,22 @@ fn console_pipe(dir: &Path, tx: mpsc::Sender<String>) -> Result<()> {
     Ok(())
 }
 
-fn send_command(dir: &Path, command: &str) -> Result<()> {
+/// Writes a command to the local console pipe. False when no supervisor listens.
+fn send_local(dir: &Path, command: &str) -> bool {
     #[cfg(unix)]
     {
         use std::{io::Write, os::unix::fs::OpenOptionsExt};
-        let mut pipe = fs::OpenOptions::new()
+        fs::OpenOptions::new()
             .write(true)
             .custom_flags(libc::O_NONBLOCK)
             .open(console_path(dir))
-            .context("the server is not running under `beacon server run`")?;
-        writeln!(pipe, "{command}")?;
-        ui::ok(format!("Sent `{command}`. Output is in the server log."));
-        Ok(())
+            .and_then(|mut pipe| writeln!(pipe, "{command}"))
+            .is_ok()
     }
     #[cfg(not(unix))]
     {
         let _ = (dir, command);
-        bail!("console commands need a Linux or macOS server")
+        false
     }
 }
 
@@ -558,6 +717,11 @@ async fn supervise(dir: PathBuf) -> Result<()> {
     let mut cfg = ServerConfig::load(&dir)?;
     let store = ObjectStore::new(dir.join(".beacon/objects"));
     let agent = agent_hub(&cfg);
+    if let Some(h) = agent.clone() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        CONSOLE.set(tx).ok();
+        tokio::spawn(uploader(h, rx));
+    }
     if let Some(tree) = srv::applied_tree(&dir) {
         srv::ensure_loader(&dir, &mut cfg, &tree, &log_progress).await?;
         if cfg.mode != ServerMode::Docker {
@@ -570,8 +734,9 @@ async fn supervise(dir: PathBuf) -> Result<()> {
     }
 
     let (tx_target, mut targets) = mpsc::channel(1);
+    let (tx_action, mut actions) = mpsc::channel(16);
     if let Some(h) = agent.clone() {
-        tokio::spawn(agent_loop(h, tx_target));
+        tokio::spawn(agent_loop(h, tx_target, tx_action));
     }
     let (tx_in, mut console) = mpsc::channel(16);
     #[cfg(unix)]
@@ -583,6 +748,7 @@ async fn supervise(dir: PathBuf) -> Result<()> {
     let mut mc = Some(Mc::start(&dir, &cfg)?);
     report(&agent, None, "running", format!("running {}", cfg.release_name.clone().unwrap_or_default()), cfg.commit.clone())
         .await;
+    push_state(&agent, &dir, true).await;
     let mut crashes: VecDeque<Instant> = VecDeque::new();
 
     loop {
@@ -598,16 +764,25 @@ async fn supervise(dir: PathBuf) -> Result<()> {
                     crashes.pop_front();
                 }
                 let wait = if crashes.len() >= 5 { 300 } else { 10 };
-                println!("[beacon] Minecraft exited ({code}); restarting in {wait}s");
+                say(format!("Minecraft exited ({code}); restarting in {wait}s"));
                 report(&agent, None, "failed", format!("Minecraft exited ({code}), restarting"), cfg.commit.clone()).await;
+                push_state(&agent, &dir, false).await;
                 tokio::time::sleep(Duration::from_secs(wait)).await;
                 mc = Some(Mc::start(&dir, &cfg)?);
                 report(&agent, None, "running", "restarted after a crash", cfg.commit.clone()).await;
+                push_state(&agent, &dir, true).await;
             }
             Some(target) = targets.recv() => {
                 let hub = agent.clone().context("no hub")?;
                 apply_update(&dir, &mut cfg, &store, &hub, target, mc.take()).await;
                 mc = Some(Mc::start(&dir, &cfg)?);
+                push_state(&agent, &dir, true).await;
+            }
+            Some(a) = actions.recv() => {
+                if let Err(e) = act(&dir, &mut cfg, &agent, &mut mc, a).await {
+                    say(format!("failed: {e:#}"));
+                }
+                push_state(&agent, &dir, mc.is_some()).await;
             }
             Some(line) = console.recv() => {
                 if let Some(m) = mc.as_mut() {
@@ -618,11 +793,105 @@ async fn supervise(dir: PathBuf) -> Result<()> {
             _ = terminate => break,
         }
     }
-    println!("[beacon] stopping Minecraft");
+    say("stopping Minecraft");
     if let Some(m) = mc {
         m.stop().await;
     }
     report(&agent, None, "stopped", "server stopped", cfg.commit.clone()).await;
+    push_state(&agent, &dir, false).await;
+    Ok(())
+}
+
+pub(crate) fn size(bytes: u64) -> String {
+    match bytes {
+        ..1_048_576 => format!("{} KB", bytes.div_ceil(1024)),
+        1_048_576..1_073_741_824 => format!("{:.0} MB", bytes as f64 / 1_048_576.0),
+        _ => format!("{:.1} GB", bytes as f64 / 1_073_741_824.0),
+    }
+}
+
+/// Carries out an owner's action from the app or CLI.
+async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut Option<Mc>, a: ServerAction) -> Result<()> {
+    let release = cfg.release_name.clone().unwrap_or_default();
+    match a {
+        ServerAction::Command(c) => {
+            let m = mc.as_mut().context("Minecraft is stopped; start it first")?;
+            out(format!("> {c}"));
+            m.send(&c).await;
+        }
+        ServerAction::Start if mc.is_some() => say("Minecraft is already running"),
+        ServerAction::Start => {
+            *mc = Some(Mc::start(dir, cfg)?);
+            report(agent, None, "running", format!("running {release}"), cfg.commit.clone()).await;
+        }
+        ServerAction::Stop => match mc.take() {
+            Some(m) => {
+                say("stopping Minecraft");
+                m.stop().await;
+                say("Minecraft stopped. Start it again from the app or with `beacon server start`.");
+                report(agent, None, "stopped", "stopped by the owner", cfg.commit.clone()).await;
+            }
+            None => say("Minecraft is not running"),
+        },
+        ServerAction::Restart => {
+            say("restarting Minecraft");
+            if let Some(m) = mc.take() {
+                m.stop().await;
+            }
+            *mc = Some(Mc::start(dir, cfg)?);
+            report(agent, None, "running", format!("running {release}"), cfg.commit.clone()).await;
+        }
+        ServerAction::Backup => {
+            say("backing up the server");
+            // Flush the world and pause saving so the archive is consistent.
+            if let Some(m) = mc.as_mut() {
+                m.send("save-off").await;
+                m.send("save-all flush").await;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            let d = dir.to_path_buf();
+            let made = tokio::task::spawn_blocking(move || backups::create(&d, "manual").inspect(|_| backups::prune(&d))).await?;
+            if let Some(m) = mc.as_mut() {
+                m.send("save-on").await;
+            }
+            let b = made?;
+            say(format!("backup done: {} ({})", b.id, size(b.size)));
+        }
+        ServerAction::Restore(id) => {
+            say(format!("restoring {id}"));
+            if let Some(mut m) = mc.take() {
+                m.send("say [BeaconSync] Restoring a backup, back in a minute").await;
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                m.stop().await;
+            }
+            let before = cfg.commit.clone();
+            let d = dir.to_path_buf();
+            let restored = tokio::task::spawn_blocking(move || -> Result<()> {
+                say("taking a safety backup first");
+                let safety = backups::create(&d, "before restore")?;
+                if let Err(e) = backups::restore(&d, &id) {
+                    backups::restore(&d, &safety.id)?;
+                    return Err(e);
+                }
+                backups::prune(&d);
+                Ok(())
+            })
+            .await?;
+            *cfg = ServerConfig::load(dir)?;
+            *mc = Some(Mc::start(dir, cfg)?);
+            restored?;
+            let now = cfg.release_name.clone().unwrap_or_default();
+            say(format!("restored, running {now}"));
+            // A whole server restore can bring back an older pack version; the hub must not
+            // push the newer deployment again until the next deploy.
+            let status = if cfg.commit != before { "rolledback" } else { "running" };
+            report(agent, None, status, format!("restored a backup, running {now}"), cfg.commit.clone()).await;
+        }
+        ServerAction::DeleteBackup(id) => {
+            backups::delete(dir, &id)?;
+            say(format!("deleted backup {id}"));
+        }
+    }
     Ok(())
 }
 
@@ -631,7 +900,7 @@ async fn supervise(dir: PathBuf) -> Result<()> {
 async fn apply_update(dir: &Path, cfg: &mut ServerConfig, store: &ObjectStore, hub: &Hub, t: AgentTarget, mc: Option<Mc>) {
     let agent = Some(hub.clone());
     let dep = Some(t.deployment.clone());
-    println!("[beacon] deploying {} ({})", t.release_name, short(&t.commit));
+    say(format!("deploying {} ({})", t.release_name, short(&t.commit)));
     report(&agent, dep.clone(), "applying", format!("updating to {}", t.release_name), cfg.commit.clone()).await;
     let result: Result<()> = async {
         let tree = fetch_tree(hub, store, &t.commit).await?;
@@ -647,11 +916,11 @@ async fn apply_update(dir: &Path, cfg: &mut ServerConfig, store: &ObjectStore, h
     .await;
     match result {
         Ok(()) => {
-            println!("[beacon] now on {}", t.release_name);
+            say(format!("now on {}", t.release_name));
             report(&agent, dep, "done", format!("running {}", t.release_name), cfg.commit.clone()).await;
         }
         Err(e) => {
-            println!("[beacon] update failed: {e:#}");
+            say(format!("update failed: {e:#}"));
             report(&agent, dep, "failed", format!("update failed: {e:#}"), cfg.commit.clone()).await;
         }
     }
@@ -665,8 +934,9 @@ async fn apply_with_backup(
     tree: &Tree,
     t: &AgentTarget,
 ) -> Result<()> {
-    let d = dir.to_path_buf();
-    tokio::task::spawn_blocking(move || backup(&d)).await??;
+    say("backing up");
+    let (d, note) = (dir.to_path_buf(), format!("before {}", t.release_name));
+    let backup = tokio::task::spawn_blocking(move || backups::create(&d, &note)).await??;
     let fetcher = Fetcher::new(Some(store.clone()), Some(hub.base.clone()));
     let applied: Result<()> = async {
         srv::apply_tree(dir, tree, &fetcher, &log_progress).await?;
@@ -678,70 +948,16 @@ async fn apply_with_backup(
     }
     .await;
     if let Err(e) = applied {
+        say("restoring the backup");
         let d = dir.to_path_buf();
-        tokio::task::spawn_blocking(move || restore(&d)).await??;
+        tokio::task::spawn_blocking(move || backups::restore(&d, &backup.id)).await??;
         *cfg = ServerConfig::load(dir)?;
         return Err(e);
     }
+    backups::prune(dir);
     cfg.commit = Some(t.commit.clone());
     cfg.release_name = Some(t.release_name.clone());
     cfg.save(dir)
-}
-
-fn backup_path(dir: &Path) -> PathBuf {
-    dir.join(".beacon/backup.tar.gz")
-}
-
-fn skip_in_backup(rel: &Path) -> bool {
-    let s = rel.to_string_lossy();
-    s.starts_with(".beacon/backup")
-        || s.starts_with(".beacon/objects")
-        || s.starts_with(".fabric")
-        || s.starts_with(".beacon/bin")
-        || s.starts_with(".beacon/home")
-        || s.starts_with("logs")
-        || s.starts_with("crash-reports")
-        || s.ends_with(".part")
-}
-
-/// Replaces the single backup with a fresh one of the whole server (worlds included).
-fn backup(dir: &Path) -> Result<()> {
-    println!("[beacon] backing up");
-    let tmp = dir.join(".beacon/backup.tar.gz.tmp");
-    {
-        let enc = flate2::write::GzEncoder::new(fs::File::create(&tmp)?, flate2::Compression::fast());
-        let mut tar = tar::Builder::new(enc);
-        tar.follow_symlinks(false);
-        for e in walkdir::WalkDir::new(dir)
-            .min_depth(1)
-            .into_iter()
-            .filter_entry(|e| !skip_in_backup(e.path().strip_prefix(dir).unwrap_or(e.path())))
-        {
-            let e = e?;
-            if e.file_type().is_file() {
-                tar.append_path_with_name(e.path(), e.path().strip_prefix(dir)?)?;
-            }
-        }
-        tar.into_inner()?.finish()?;
-    }
-    fs::rename(&tmp, backup_path(dir))?;
-    Ok(())
-}
-
-/// Removes pack managed files, then unpacks the backup over the server folder.
-fn restore(dir: &Path) -> Result<()> {
-    let file = backup_path(dir);
-    if !file.is_file() {
-        bail!("no backup to restore");
-    }
-    println!("[beacon] restoring backup");
-    if let Some(tree) = srv::applied_tree(dir) {
-        for p in tree.files.keys() {
-            fs::remove_file(dir.join(p)).ok();
-        }
-    }
-    tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?)).unpack(dir)?;
-    Ok(())
 }
 
 async fn update_once(dir: &Path) -> Result<()> {
@@ -750,7 +966,7 @@ async fn update_once(dir: &Path) -> Result<()> {
     }
     let mut cfg = ServerConfig::load(dir)?;
     let hub = agent_hub(&cfg).context("server is not linked to a hub")?;
-    let poll = hub.agent_poll(0).await?;
+    let poll = hub.agent_poll(0, None).await?;
     let Some(t) = poll.target else {
         ui::ok(format!("Up to date ({})", cfg.release_name.clone().unwrap_or_default()));
         return Ok(());
@@ -803,9 +1019,13 @@ async fn status(dir: &Path) -> Result<()> {
         "no (or not supervised)".into()
     };
     println!("  Running   {running}");
-    println!("  Backup    {}", if backup_path(dir).is_file() { "yes" } else { "none yet" });
+    let all = backups::list(dir);
+    match all.first() {
+        Some(b) => println!("  Backups   {} · newest {} ({})", all.len(), ui::ago(b.created), b.source),
+        None => println!("  Backups   none yet"),
+    }
     if let Some(hub) = agent_hub(&cfg) {
-        match hub.agent_poll(0).await {
+        match hub.agent_poll(0, None).await {
             Ok(p) => match p.target {
                 Some(t) => println!("  Pending   {} (deploying)", t.release_name),
                 None => println!("  Hub       {} · up to date", hub.base),
@@ -818,13 +1038,17 @@ async fn status(dir: &Path) -> Result<()> {
 
 async fn rollback(dir: &Path) -> Result<()> {
     if running_pid(dir).is_some() {
-        bail!("stop the server first (e.g. `sudo systemctl stop {}`)", srv::service_name(&ServerConfig::load(dir)?));
+        bail!("the server is running; use `beacon server backups restore <id>` to restore while it runs");
     }
-    if !ui::confirm("Restore the backup from before the last update? World changes since then are lost.", false)? {
+    let b = backups::latest(dir).context("no backup to restore")?;
+    if !ui::confirm(
+        &format!("Restore the backup from {} ({})? World changes since then are lost.", ui::ago(b.created), b.note),
+        false,
+    )? {
         return Ok(());
     }
     let d = dir.to_path_buf();
-    tokio::task::spawn_blocking(move || restore(&d)).await??;
+    tokio::task::spawn_blocking(move || backups::restore(&d, &b.id)).await??;
     let cfg = ServerConfig::load(dir)?;
     // The hub won't push the rolled back deployment again until a new deploy.
     report(
@@ -837,4 +1061,107 @@ async fn rollback(dir: &Path) -> Result<()> {
     .await;
     ui::ok(format!("Rolled back to {}. Start the server again.", cfg.release_name.unwrap_or_default()));
     Ok(())
+}
+
+// ---- managing a server from anywhere --------------------------------------------------------
+
+/// The hub and server to manage, and the release it runs: `--server` among your packs'
+/// servers, else the server installed in the folder.
+pub async fn remote(t: Target, global_dir: Option<PathBuf>) -> Result<(Hub, Server, String)> {
+    let s = Settings::load();
+    let token = s.token.clone().context("run `beacon login` first")?;
+    if let Some(q) = t.server {
+        let hub = Hub::authed(&s)?;
+        let mut found = vec![];
+        for p in hub.library().await?.into_iter().filter(|p| p.mine) {
+            let matching = hub.servers(&p.id).await?.into_iter().filter(|x| x.id == q || x.name.eq_ignore_ascii_case(&q));
+            found.extend(matching.map(|x| (p.id.clone(), x)));
+        }
+        let (pack, server) = match found.len() {
+            0 => bail!("no server named {q} in your packs"),
+            1 => found.remove(0),
+            _ => bail!("{q} matches several servers; pass its id"),
+        };
+        let commit = server.current_commit.clone().unwrap_or_default();
+        let version = hub
+            .releases(&pack)
+            .await?
+            .into_iter()
+            .find(|r| r.commit == commit)
+            .map_or_else(|| short(&commit).to_string(), |r| r.name);
+        return Ok((hub, server, version));
+    }
+    let dir = t.path.or(global_dir).unwrap_or(std::env::current_dir()?);
+    let cfg = ServerConfig::load(&dir).context("not a server folder; pass --server <name>")?;
+    let (Some(url), Some(id)) = (cfg.hub.clone(), cfg.server_id.clone()) else { bail!("this server is not linked to a hub") };
+    let version = cfg.release_name.clone().unwrap_or_default();
+    let server = Server {
+        id,
+        name: cfg.name,
+        mode: cfg.mode,
+        address: cfg.address,
+        current_commit: cfg.commit,
+        target_commit: None,
+        target_release: None,
+        status: String::new(),
+        message: String::new(),
+        last_seen: None,
+        online: true,
+    };
+    Ok((Hub::new(&url, Some(token)), server, version))
+}
+
+/// Sends an action and prints the server's `[beacon]` replies until one says it finished.
+async fn act_remote(t: Target, global_dir: Option<PathBuf>, a: ServerAction, done: &[&str]) -> Result<()> {
+    let (hub, server, _) = remote(t, global_dir).await?;
+    let mut next = hub.console(&server.id, None, 0).await?.next;
+    hub.server_action(&server.id, &a).await?;
+    ui::info(format!("Sent to {}", server.name));
+    if done.is_empty() {
+        return Ok(());
+    }
+    let deadline = Instant::now() + Duration::from_secs(600);
+    while Instant::now() < deadline {
+        let v = hub.console(&server.id, Some(next), 20).await?;
+        next = v.next;
+        for l in v.lines.iter().filter(|l| l.starts_with("[beacon]") || l.starts_with('>')) {
+            println!("  {}", ui::dim(l));
+            if l.contains("failed:") {
+                bail!("{}", l.trim_start_matches("[beacon] failed: "));
+            }
+            if done.iter().any(|d| l.contains(d)) {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn backups_cmd(t: Target, global_dir: Option<PathBuf>, action: Option<BackupCmd>) -> Result<()> {
+    match action {
+        Some(BackupCmd::Create) => act_remote(t, global_dir, ServerAction::Backup, &["backup done"]).await,
+        Some(BackupCmd::Restore { id }) => {
+            if !ui::confirm(&format!("Restore {id}? Minecraft restarts and world changes since then are lost."), false)? {
+                return Ok(());
+            }
+            act_remote(t, global_dir, ServerAction::Restore(id), &["restored,"]).await
+        }
+        Some(BackupCmd::Delete { id }) => act_remote(t, global_dir, ServerAction::DeleteBackup(id), &["deleted backup"]).await,
+        None => {
+            let (hub, server, _) = remote(t, global_dir).await?;
+            let v = hub.console(&server.id, None, 0).await?;
+            if !v.online {
+                bail!("{} is offline", server.name);
+            }
+            if v.backups.is_empty() {
+                ui::info("No backups yet. Make one with `beacon server backups create`.");
+            }
+            for b in &v.backups {
+                // The id is what `restore` takes; mod backups' notes are just their path.
+                let what = if b.full { format!("whole server · {:<16}", b.note) } else { format!("{:<31}", "world") };
+                println!("{:<14} {:>8}  {:<10} {}  {}", b.source, size(b.size), ui::ago(b.created), ui::dim(what), b.id);
+            }
+            Ok(())
+        }
+    }
 }

@@ -68,6 +68,8 @@ export interface Commands {
   releases: Cmd<P, T.Release[]>
   servers: Cmd<P, T.Server[]>
   deploy: Cmd<P<{ release: string; servers: string[] | null }>, T.DeployResponse>
+  server_console: Cmd<P<{ server: string; after: number | null }>, T.ConsoleView>
+  server_action: Cmd<P<{ server: string; action: T.ServerAction }>, null>
   export_server_pack: Cmd<P<{ out: string }>, null>
 }
 

@@ -131,14 +131,23 @@ GET|POST /api/packs/:id/releases   { commit, name, notes }
 GET|POST /api/packs/:id/servers    { name, mode, address } -> { server, token }
 DELETE   /api/packs/:id/servers/:sid
 POST /api/packs/:id/deploy         { release, servers: [ids] | "all" }
+GET  /api/servers/:sid/console?after=N&wait=20
+                                   -> { lines, next, backups, online, running }   (long poll; no `after` = last 500 lines)
+POST /api/servers/:sid/actions     { kind: "command", arg } | { kind: "start|stop|restart|backup" }
+                                   | { kind: "restore|delete_backup", arg: backup id }
 ```
 
 Server agent (server token):
 
 ```
-GET  /api/agent/poll?wait=25   -> { target: { commit, release, deployment } | null }   (long poll)
-POST /api/agent/report         { deployment, status: "applying|done|failed", message, commit }
+GET  /api/agent/poll?wait=25&known=<deployment>
+                               -> { target: { commit, release, deployment } | null, actions: [...] }   (long poll)
+POST /api/agent/report         { deployment, status: "applying|done|failed|running|stopped|rolledback", message, commit }
+POST /api/agent/console        { lines, backups?, running? }
 ```
+
+The hub keeps the last 2000 console lines and the backup list per server in memory only; the
+agent sends its backups and state again when it starts.
 
 ## Deploy flow
 
@@ -146,7 +155,8 @@ POST /api/agent/report         { deployment, status: "applying|done|failed", mes
 2. Publish pushes objects + branch ref to the hub and creates a release.
 3. Deploy sets the target release on the chosen servers (one, several or all).
 4. Each server runs `beacon server run`, which supervises the Minecraft process and long polls
-   the hub. On a new target it warns players, stops the server, keeps one backup, applies the
-   new tree, restarts and reports back.
+   the hub. On a new target it warns players, stops the server, backs it up, applies the
+   new tree, restarts and reports back. It keeps the last 10 BeaconSync backups in
+   `.beacon/backups`, and also lists world archives backup mods leave in `*backup*` folders.
 5. Players with the companion mod get an in-game toast, can compare their version with the
    server's and pull configs/resource packs live (mods are staged for the next restart).

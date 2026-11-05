@@ -189,9 +189,12 @@ impl Hub {
 
     // ---- server agent -------------------------------------------------------------------
 
-    pub async fn agent_poll(&self, wait_secs: u64) -> Result<AgentPoll> {
+    /// Long polls for a deploy target and owner actions. `known` is the deployment the agent
+    /// already has, so the hub keeps waiting instead of returning it again.
+    pub async fn agent_poll(&self, wait_secs: u64, known: Option<&str>) -> Result<AgentPoll> {
+        let known = known.map(|k| format!("&known={k}")).unwrap_or_default();
         let resp = self
-            .request(Method::GET, &format!("/api/agent/poll?wait={wait_secs}"))
+            .request(Method::GET, &format!("/api/agent/poll?wait={wait_secs}{known}"))
             .timeout(std::time::Duration::from_secs(wait_secs + 20))
             .send()
             .await?;
@@ -200,6 +203,27 @@ impl Hub {
 
     pub async fn agent_report(&self, r: &AgentReport) -> Result<serde_json::Value> {
         self.post("/api/agent/report", r).await
+    }
+
+    pub async fn agent_console(&self, c: &AgentConsole) -> Result<serde_json::Value> {
+        self.post("/api/agent/console", c).await
+    }
+
+    // ---- server management (owners) -------------------------------------------------------
+
+    /// Console lines after `after` (the last ones when None), waiting up to `wait_secs` for new ones.
+    pub async fn console(&self, server: &str, after: Option<u64>, wait_secs: u64) -> Result<ConsoleView> {
+        let after = after.map(|a| format!("&after={a}")).unwrap_or_default();
+        let resp = self
+            .request(Method::GET, &format!("/api/servers/{server}/console?wait={wait_secs}{after}"))
+            .timeout(std::time::Duration::from_secs(wait_secs + 20))
+            .send()
+            .await?;
+        Ok(Self::check(resp).await?.json().await?)
+    }
+
+    pub async fn server_action(&self, server: &str, a: &ServerAction) -> Result<serde_json::Value> {
+        self.post(&format!("/api/servers/{server}/actions"), a).await
     }
 }
 

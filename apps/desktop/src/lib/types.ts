@@ -189,6 +189,32 @@ export interface Server {
   online: boolean
 }
 
+/** Mirrors `api::ServerAction` (serde tag "kind", content "arg"). */
+export type ServerAction =
+  | { kind: 'command'; arg: string }
+  | { kind: 'start' | 'stop' | 'restart' | 'backup' }
+  | { kind: 'restore' | 'delete_backup'; arg: string }
+
+export interface Backup {
+  /** Path relative to the server folder. */
+  id: string
+  /** "BeaconSync" or the backup mod, e.g. "FTB Backups". */
+  source: string
+  note: string
+  size: number
+  created: number
+  /** Whole server, or only the world. */
+  full: boolean
+}
+
+export interface ConsoleView {
+  lines: string[]
+  next: number
+  backups: Backup[]
+  online: boolean
+  running: boolean
+}
+
 export interface DeployResponse {
   deployment: string
   servers: string[]

@@ -66,13 +66,13 @@ async fn publish_and_deploy_flow() {
         .await
         .unwrap();
     let agent = Hub::new(&base, Some(server.token));
-    assert!(agent.agent_poll(0).await.unwrap().target.is_none());
+    assert!(agent.agent_poll(0, None).await.unwrap().target.is_none());
     assert!(agent.library().await.is_err(), "server tokens can't act as users");
 
     // A waiting agent is woken by the deploy instead of waiting out its poll.
     let waiting = tokio::spawn(async move {
         let started = std::time::Instant::now();
-        let poll = agent.agent_poll(20).await.unwrap();
+        let poll = agent.agent_poll(20, None).await.unwrap();
         (poll, started.elapsed(), agent)
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -91,7 +91,7 @@ async fn publish_and_deploy_flow() {
         })
         .await
         .unwrap();
-    assert!(agent.agent_poll(0).await.unwrap().target.is_none());
+    assert!(agent.agent_poll(0, None).await.unwrap().target.is_none());
     let servers = hub.servers(&pack.id).await.unwrap();
     assert_eq!(servers[0].current_commit.as_deref(), Some(c2.as_str()));
     assert!(servers[0].online);
@@ -137,15 +137,15 @@ async fn rolled_back_deploys_are_not_resent() {
     let report = |status: &str| AgentReport { deployment: None, status: status.into(), message: String::new(), commit: None };
 
     hub.deploy(&pack.id, &deploy(r1.id.clone())).await.unwrap();
-    assert!(agent.agent_poll(0).await.unwrap().target.is_some());
+    assert!(agent.agent_poll(0, None).await.unwrap().target.is_some());
     agent.agent_report(&report("rolledback")).await.unwrap();
-    assert!(agent.agent_poll(0).await.unwrap().target.is_none());
+    assert!(agent.agent_poll(0, None).await.unwrap().target.is_none());
     // Restarting the supervisor reports "running"; the rolled back deploy must stay put.
     agent.agent_report(&report("running")).await.unwrap();
-    assert!(agent.agent_poll(0).await.unwrap().target.is_none());
+    assert!(agent.agent_poll(0, None).await.unwrap().target.is_none());
     // A new deploy is offered again.
     hub.deploy(&pack.id, &deploy(r1.id)).await.unwrap();
-    assert!(agent.agent_poll(0).await.unwrap().target.is_some());
+    assert!(agent.agent_poll(0, None).await.unwrap().target.is_some());
 }
 
 #[tokio::test]
@@ -179,4 +179,78 @@ async fn rollback_publishes_old_files_as_a_new_release_and_deploys_it() {
     assert_eq!(r.release.unwrap().name, "1.0 (rollback)");
     assert_eq!(r.servers, 1);
     assert_eq!(hub.servers(&pack).await.unwrap()[0].target_commit.as_deref(), Some(r.commit.as_str()));
+}
+
+#[tokio::test]
+async fn console_and_actions_are_relayed_between_owner_and_server() {
+    let (_tmp, base) = start().await;
+    let anon = Hub::new(&base, None);
+    let owner = Hub::new(
+        &base,
+        Some(anon.register(&Credentials { username: "doc".into(), password: "longpassword".into() }).await.unwrap().token),
+    );
+    let other = Hub::new(
+        &base,
+        Some(anon.register(&Credentials { username: "eve".into(), password: "longpassword".into() }).await.unwrap().token),
+    );
+    let pack = owner
+        .create_pack(&NewPack {
+            name: "P".into(),
+            description: String::new(),
+            minecraft: "1.21.1".into(),
+            loader: Loader::default(),
+        })
+        .await
+        .unwrap();
+    let created = owner
+        .create_server(&pack.id, &NewServer { name: "S".into(), mode: ServerMode::Service, address: "x:25565".into() })
+        .await
+        .unwrap();
+    let (sid, agent) = (created.server.id.clone(), Hub::new(&base, Some(created.token)));
+    agent.agent_poll(0, None).await.unwrap();
+
+    let backup = Backup {
+        id: "backups/a.zip".into(),
+        source: "FTB Backups".into(),
+        note: "a.zip".into(),
+        size: 1,
+        created: 0,
+        full: false,
+    };
+    agent
+        .agent_console(&AgentConsole {
+            lines: vec!["Done (3.2s)!".into()],
+            backups: Some(vec![backup.clone()]),
+            running: Some(true),
+        })
+        .await
+        .unwrap();
+    let v = owner.console(&sid, None, 0).await.unwrap();
+    assert_eq!((v.lines, v.backups, v.running, v.next), (vec!["Done (3.2s)!".to_string()], vec![backup], true, 1));
+
+    // A viewer waiting after the cursor is woken by the next line.
+    let waiting = tokio::spawn({
+        let owner = owner.clone();
+        let sid = sid.clone();
+        async move { owner.console(&sid, Some(1), 10).await.unwrap() }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    agent.agent_console(&AgentConsole { lines: vec!["Steve joined the game".into()], ..Default::default() }).await.unwrap();
+    let v = tokio::time::timeout(Duration::from_secs(3), waiting).await.unwrap().unwrap();
+    assert_eq!(v.lines, vec!["Steve joined the game".to_string()]);
+
+    // Actions reach a long polling agent right away, once.
+    let polling = tokio::spawn({
+        let agent = agent.clone();
+        async move { agent.agent_poll(20, None).await.unwrap() }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    owner.server_action(&sid, &ServerAction::Command("list".into())).await.unwrap();
+    let p = tokio::time::timeout(Duration::from_secs(3), polling).await.unwrap().unwrap();
+    assert_eq!(p.actions, vec![ServerAction::Command("list".into())]);
+    assert!(agent.agent_poll(0, None).await.unwrap().actions.is_empty());
+
+    // Only the owner can watch or control the server.
+    assert!(other.console(&sid, None, 0).await.is_err());
+    assert!(other.server_action(&sid, &ServerAction::Stop).await.is_err());
 }

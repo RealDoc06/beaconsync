@@ -1,13 +1,17 @@
 //! Full screen terminal UI, opened by running `beacon` with no command.
 //!
 //! Left: the packs on this machine. Right: the selected pack's changes, history, branches
-//! and releases with live server status. Work runs on tokio tasks that report back over one
-//! channel, so the screen never blocks.
+//! and releases with live server status, and servers you can open for their console and
+//! backups (`console.rs`). Work runs on tokio tasks that report back over one channel, so the
+//! screen never blocks.
 
-use crate::pack::{author, hub_for};
+use crate::{
+    console::{Out, ServerScreen},
+    pack::{author, hub_for},
+};
 use anyhow::{Context, Result};
 use beacon_core::{
-    api::{AllServers, DeployRequest, DeployTargets, Release},
+    api::{AllServers, ConsoleView, DeployRequest, DeployTargets, Release, Server, ServerAction},
     diff::ChangeKind,
     fetch::Progress,
     hash::short,
@@ -26,7 +30,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph},
 };
 use std::{future::Future, path::PathBuf, time::Duration};
-use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -34,9 +38,10 @@ enum Tab {
     History,
     Branches,
     Releases,
+    Servers,
 }
 
-const TABS: [Tab; 4] = [Tab::Changes, Tab::History, Tab::Branches, Tab::Releases];
+const TABS: [Tab; 5] = [Tab::Changes, Tab::History, Tab::Branches, Tab::Releases, Tab::Servers];
 
 impl Tab {
     fn label(self) -> &'static str {
@@ -45,6 +50,7 @@ impl Tab {
             Tab::History => "History",
             Tab::Branches => "Branches",
             Tab::Releases => "Releases",
+            Tab::Servers => "Servers",
         }
     }
 }
@@ -65,6 +71,8 @@ struct Remote {
 }
 
 struct ServerRow {
+    /// Full server info for owners, who can open it; players only see the public fields.
+    owned: Option<Server>,
     name: String,
     address: String,
     online: bool,
@@ -81,6 +89,9 @@ enum Msg {
     Remote(PathBuf, Result<Remote>),
     Progress(Progress),
     Done(Result<String>),
+    /// A result to show that needs no reload, e.g. a sent server action.
+    Note(Result<String>),
+    Console(Result<ConsoleView, String>),
 }
 
 /// Text prompts.
@@ -96,6 +107,7 @@ enum Sure {
     Discard,
     Rollback { id: String },
     Deploy { release: Release },
+    Server(ServerAction),
 }
 
 enum Modal {
@@ -118,7 +130,11 @@ struct App {
     /// Keys go to the right pane when true.
     inside: bool,
     tab: Tab,
-    rows: [ListState; 4],
+    rows: [ListState; 5],
+    /// The open server screen, drawn instead of the pack.
+    server: Option<ServerScreen>,
+    /// Opened with `beacon server console`: closing the server quits.
+    server_only: bool,
     local: Option<Local>,
     remote: Option<Result<Remote, String>>,
     modal: Option<Modal>,
@@ -128,9 +144,9 @@ struct App {
     quit: bool,
 }
 
-/// Runs the UI until the user quits.
-pub async fn run() -> Result<()> {
-    let (tx, mut rx) = unbounded_channel();
+/// The app channel, fed with key presses from a reader thread.
+fn keys_channel() -> (UnboundedSender<Msg>, UnboundedReceiver<Msg>) {
+    let (tx, rx) = unbounded_channel();
     let keys = tx.clone();
     std::thread::spawn(move || {
         loop {
@@ -145,7 +161,26 @@ pub async fn run() -> Result<()> {
             }
         }
     });
-    let mut app = App::new(tx);
+    (tx, rx)
+}
+
+/// Runs the UI until the user quits.
+pub async fn run() -> Result<()> {
+    let (tx, rx) = keys_channel();
+    let app = App::new(tx, true);
+    event_loop(app, rx).await
+}
+
+/// Opens straight into one server's console (`beacon server console`).
+pub async fn run_server(hub: Hub, server: Server, version: String) -> Result<()> {
+    let (tx, rx) = keys_channel();
+    let mut app = App::new(tx, false);
+    app.server_only = true;
+    app.open_server(hub, server, version);
+    event_loop(app, rx).await
+}
+
+async fn event_loop(mut app: App, mut rx: UnboundedReceiver<Msg>) -> Result<()> {
     let mut term = ratatui::init();
     let mut tick = tokio::time::interval(Duration::from_secs(3));
     let res = loop {
@@ -190,6 +225,7 @@ async fn read_remote(repo: Repo) -> Result<Remote> {
         let servers = servers
             .into_iter()
             .map(|s| ServerRow {
+                owned: Some(s.clone()),
                 name: s.name,
                 address: s.address,
                 online: s.online,
@@ -205,6 +241,7 @@ async fn read_remote(repo: Repo) -> Result<Remote> {
         .servers
         .into_iter()
         .map(|s| ServerRow {
+            owned: None,
             name: s.name,
             address: s.address,
             online: s.online,
@@ -217,7 +254,8 @@ async fn read_remote(repo: Repo) -> Result<Remote> {
 }
 
 impl App {
-    fn new(tx: UnboundedSender<Msg>) -> Self {
+    /// `packs` loads the pack list (false for the server only screen).
+    fn new(tx: UnboundedSender<Msg>, packs: bool) -> Self {
         let s = Settings::load();
         let account = match (&s.token, &s.username) {
             (Some(_), Some(u)) => format!("{u} @ {}", s.hub_url()),
@@ -230,6 +268,8 @@ impl App {
             inside: false,
             tab: Tab::Changes,
             rows: Default::default(),
+            server: None,
+            server_only: false,
             local: None,
             remote: None,
             modal: None,
@@ -238,8 +278,35 @@ impl App {
             account,
             quit: false,
         };
-        app.reload_packs();
+        if packs {
+            app.reload_packs();
+        }
         app
+    }
+
+    fn open_server(&mut self, hub: Hub, server: Server, version: String) {
+        let tx = self.tx.clone();
+        self.note = None;
+        self.server = Some(ServerScreen::open(hub, server, version, move |v| tx.send(Msg::Console(v)).is_ok()));
+    }
+
+    /// Sends an action to the open server; its output shows up in the console.
+    fn send_action(&mut self, a: ServerAction) {
+        let Some(scr) = &self.server else { return };
+        let (hub, id, tx) = (scr.hub.clone(), scr.server.id.clone(), self.tx.clone());
+        let label = match &a {
+            ServerAction::Command(_) => None,
+            ServerAction::Start => Some("Starting"),
+            ServerAction::Stop => Some("Stopping"),
+            ServerAction::Restart => Some("Restarting"),
+            ServerAction::Backup => Some("Backing up, follow along in the console"),
+            ServerAction::Restore(_) => Some("Restoring, follow along in the console"),
+            ServerAction::DeleteBackup(_) => Some("Deleting"),
+        };
+        tokio::spawn(async move {
+            let r = hub.server_action(&id, &a).await.map(|_| label.unwrap_or_default().to_string());
+            tx.send(Msg::Note(r)).ok();
+        });
     }
 
     fn reload_packs(&mut self) {
@@ -276,7 +343,8 @@ impl App {
 
     fn tick(&mut self) {
         // Servers move during a deploy, so the Releases tab polls the hub.
-        if self.busy.is_none() && self.tab == Tab::Releases && self.local.as_ref().is_some_and(|l| l.cfg.remote.is_some()) {
+        let live = matches!(self.tab, Tab::Releases | Tab::Servers);
+        if self.busy.is_none() && self.server.is_none() && live && self.local.as_ref().is_some_and(|l| l.cfg.remote.is_some()) {
             self.load(false);
         }
     }
@@ -315,6 +383,7 @@ impl App {
             Msg::Remote(p, r) if Some(&p) == self.path().as_ref() => {
                 if let Ok(r) = &r {
                     clamp(&mut self.rows[3], r.releases.len());
+                    clamp(&mut self.rows[4], r.servers.len());
                 }
                 self.remote = Some(r.map_err(|e| format!("{e:#}")));
             }
@@ -322,6 +391,18 @@ impl App {
             Msg::Progress(p) => {
                 if let Some(b) = &mut self.busy {
                     b.1 = Some(p);
+                }
+            }
+            Msg::Note(r) => {
+                self.note = match r {
+                    Ok(s) if s.is_empty() => None,
+                    Ok(s) => Some((true, s)),
+                    Err(e) => Some((false, format!("{e:#}"))),
+                }
+            }
+            Msg::Console(v) => {
+                if let Some(scr) = &mut self.server {
+                    scr.apply(v);
                 }
             }
             Msg::Done(r) => {
@@ -343,6 +424,16 @@ impl App {
         if self.modal.is_some() {
             return self.modal_key(k);
         }
+        if let Some(scr) = &mut self.server {
+            match scr.key(k) {
+                Out::None => {}
+                Out::Close if self.server_only => self.quit = true,
+                Out::Close => self.server = None,
+                Out::Act(a) => self.send_action(a),
+                Out::Confirm(text, a) => self.modal = Some(Modal::Confirm { sure: Sure::Server(a), text, everyone: None }),
+            }
+            return;
+        }
         let by = match k.code {
             KeyCode::Down | KeyCode::Char('j') => 1,
             KeyCode::Up | KeyCode::Char('k') => -1,
@@ -363,12 +454,12 @@ impl App {
             KeyCode::Esc if !self.inside => self.quit = true,
             KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => self.inside = false,
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if !self.inside => self.inside = true,
-            KeyCode::Tab => self.tab = TABS[(self.tab as usize + 1) % 4],
-            KeyCode::BackTab => self.tab = TABS[(self.tab as usize + 3) % 4],
-            KeyCode::Char(c @ '1'..='4') => self.tab = TABS[c as usize - '1' as usize],
+            KeyCode::Tab => self.tab = TABS[(self.tab as usize + 1) % TABS.len()],
+            KeyCode::BackTab => self.tab = TABS[(self.tab as usize + TABS.len() - 1) % TABS.len()],
+            KeyCode::Char(c @ '1'..='5') => self.tab = TABS[c as usize - '1' as usize],
             KeyCode::Char('R') => self.reload_packs(),
             KeyCode::Char(c) => self.action(c),
-            KeyCode::Enter if self.tab == Tab::Branches => self.action('\n'),
+            KeyCode::Enter if matches!(self.tab, Tab::Branches | Tab::Servers) => self.action('\n'),
             _ => {}
         }
     }
@@ -380,6 +471,7 @@ impl App {
             Tab::History => l.log.len(),
             Tab::Branches => l.branches.len(),
             Tab::Releases => self.remote.as_ref().and_then(|r| r.as_ref().ok()).map_or(0, |r| r.releases.len()),
+            Tab::Servers => self.remote.as_ref().and_then(|r| r.as_ref().ok()).map_or(0, |r| r.servers.len()),
         }
     }
 
@@ -418,6 +510,23 @@ impl App {
                 let everyone = (owner && published).then_some(true);
                 self.modal = Some(Modal::Confirm { sure: Sure::Rollback { id: e.id.clone() }, text, everyone });
             }
+            ('\n', Tab::Servers) => {
+                let Some(Ok(r)) = &self.remote else { return };
+                let Some(row) = self.selected(&r.servers).map(|i| &r.servers[i]) else { return };
+                let Some(server) = row.owned.clone() else {
+                    self.note = Some((false, "Only the pack's owner can manage its servers".into()));
+                    return;
+                };
+                let version = server
+                    .current_commit
+                    .as_deref()
+                    .map(|c| release_of(&self.remote, c).map_or_else(|| short(c).to_string(), str::to_string))
+                    .unwrap_or_default();
+                match hub_for(&repo) {
+                    Ok(hub) => self.open_server(hub, server, version),
+                    Err(e) => self.note = Some((false, format!("{e:#}"))),
+                }
+            }
             ('n', Tab::Branches) => self.modal = Some(Modal::Input { ask: Ask::Branch, value: String::new() }),
             ('\n', Tab::Branches) => {
                 let Some(b) = self.selected(&l.branches).map(|i| l.branches[i].name.clone()) else { return };
@@ -441,6 +550,15 @@ impl App {
 
     fn modal_key(&mut self, k: KeyEvent) {
         let Some(modal) = self.modal.take() else { return };
+        // Server confirmations need no pack (`beacon server console` has none).
+        if let Modal::Confirm { sure: Sure::Server(a), text, .. } = modal {
+            match k.code {
+                KeyCode::Char('y') | KeyCode::Enter => self.send_action(a),
+                KeyCode::Char('n') | KeyCode::Esc => {}
+                _ => self.modal = Some(Modal::Confirm { sure: Sure::Server(a), text, everyone: None }),
+            }
+            return;
+        }
         let Some(repo) = self.local.as_ref().map(|l| l.repo.clone()) else { return };
         match modal {
             Modal::Input { ask, mut value } => match k.code {
@@ -488,6 +606,7 @@ impl App {
 
     fn confirm(&mut self, sure: Sure, everyone: bool, repo: Repo) {
         match sure {
+            Sure::Server(a) => self.send_action(a),
             Sure::Discard => self.spawn("Discarding", move |tx| async move {
                 repo.discard(None, &move |p| drop(tx.send(Msg::Progress(p)))).await?;
                 Ok("Unsaved changes discarded".into())
@@ -518,8 +637,14 @@ impl App {
             Layout::vertical([Constraint::Length(1), Constraint::Min(3), Constraint::Length(2)]).areas(f.area());
         f.render_widget(Line::from(vec![" BeaconSync".bold(), "  ".into(), self.account.clone().dark_gray()]), head);
         let [left, right] = Layout::horizontal([Constraint::Length(30), Constraint::Min(20)]).areas(body);
-        self.draw_packs(f, left);
-        self.draw_pack(f, right);
+        if !self.server_only {
+            self.draw_packs(f, left);
+        }
+        match &mut self.server {
+            Some(scr) if self.server_only => scr.draw(f, body.inner(ratatui::layout::Margin::new(1, 0))),
+            Some(scr) => scr.draw(f, right.inner(ratatui::layout::Margin::new(1, 0))),
+            None => self.draw_pack(f, right),
+        }
         self.draw_footer(f, foot);
         if let Some(m) = &self.modal {
             draw_modal(f, m);
@@ -647,6 +772,7 @@ impl App {
                 })
                 .collect(),
             Tab::Releases => return self.draw_releases(f, list),
+            Tab::Servers => return self.draw_servers(f, list),
         };
         let list_widget = List::new(items).highlight_style(highlight(self.inside));
         f.render_stateful_widget(list_widget, list, &mut self.rows[self.tab as usize]);
@@ -703,6 +829,48 @@ impl App {
         f.render_widget(Paragraph::new(lines), srv_area);
     }
 
+    fn draw_servers(&mut self, f: &mut Frame, area: Rect) {
+        let r = match &self.remote {
+            None if self.local.as_ref().is_some_and(|l| l.cfg.remote.is_none()) => {
+                return f
+                    .render_widget(Paragraph::new("Not published. Publish a release, then install a server.").dark_gray(), area);
+            }
+            None => return f.render_widget(Paragraph::new("Loading...").dark_gray(), area),
+            Some(Err(e)) => return f.render_widget(Paragraph::new(e.clone()).red(), area),
+            Some(Ok(r)) => r,
+        };
+        if r.servers.is_empty() {
+            let text = "No servers yet. On the server machine run:\n  beacon login\n  beacon server install";
+            return f.render_widget(Paragraph::new(text).dark_gray(), area);
+        }
+        let name_of = |c: &Option<String>| {
+            c.as_deref()
+                .map(|c| release_of(&self.remote, c).map_or_else(|| short(c).to_string(), str::to_string))
+                .unwrap_or_default()
+        };
+        let items: Vec<ListItem> = r
+            .servers
+            .iter()
+            .map(|s| {
+                let (dot, state) = match (&s.target, s.online, s.owned.as_ref().map(|o| o.status.as_str())) {
+                    (Some(_), ..) => ("◐ ".yellow(), format!("updating to {}", name_of(&s.target)).yellow()),
+                    (None, true, Some("stopped")) => ("● ".yellow(), "stopped".yellow()),
+                    (None, true, _) => ("● ".green(), "online".into()),
+                    (None, false, _) => ("○ ".dark_gray(), "offline".dark_gray()),
+                };
+                ListItem::new(Line::from(vec![
+                    dot,
+                    format!("{:<20} ", s.name).into(),
+                    format!("{:<22}", s.address).dark_gray(),
+                    format!("{:<16}", name_of(&s.commit)).into(),
+                    state,
+                    format!("  {}", s.message).red(),
+                ]))
+            })
+            .collect();
+        f.render_stateful_widget(List::new(items).highlight_style(highlight(self.inside)), area, &mut self.rows[4]);
+    }
+
     fn draw_footer(&self, f: &mut Frame, area: Rect) {
         let [status, keys] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(area);
         match (&self.busy, &self.note) {
@@ -719,6 +887,11 @@ impl App {
             (None, Some((false, s))) => f.render_widget(Line::from(vec![" ! ".yellow().bold(), s.clone().into()]), status),
             (None, None) => {}
         }
+        if let Some(scr) = &self.server {
+            let spans: Vec<Span> =
+                scr.hints().into_iter().flat_map(|(k, v)| [format!(" {k} ").bold(), format!("{v}  ").dark_gray()]).collect();
+            return f.render_widget(Line::from(spans), keys);
+        }
         let role = self.local.as_ref().map(|l| l.cfg.role);
         let mut hints: Vec<(&str, &str)> = if self.inside { vec![("esc", "packs")] } else { vec![("enter", "open")] };
         hints.extend([("tab", "view")]);
@@ -729,6 +902,8 @@ impl App {
             Tab::Branches => hints.extend([("enter", "switch"), ("n", "new")]),
             Tab::Releases if role == Some(Role::Owner) => hints.extend([("p", "publish"), ("d", "deploy")]),
             Tab::Releases => {}
+            Tab::Servers if role == Some(Role::Owner) => hints.extend([("enter", "console and backups")]),
+            Tab::Servers => {}
         }
         if role == Some(Role::Subscriber) {
             hints.push(("u", "update"));
