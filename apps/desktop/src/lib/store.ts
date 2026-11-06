@@ -88,6 +88,7 @@ export const keys = {
   badges: (path: string) => ['badges', path] as const,
   pack: (path: string) => ['pack', path] as const,
   settings: ['settings'] as const,
+  update: ['update'] as const,
 }
 
 /** Everything that can change after editing a pack. */

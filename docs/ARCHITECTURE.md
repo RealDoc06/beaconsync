@@ -135,6 +135,7 @@ GET  /api/servers/:sid/console?after=N&wait=20
                                    -> { lines, next, backups, online, running }   (long poll; no `after` = last 500 lines)
 POST /api/servers/:sid/actions     { kind: "command", arg } | { kind: "start|stop|restart|backup" }
                                    | { kind: "restore|delete_backup", arg: backup id }
+                                   | { kind: "update", arg: BeaconSync version }   (refused for agents that don't report a version)
 ```
 
 Server agent (server token):
@@ -142,9 +143,11 @@ Server agent (server token):
 ```
 GET  /api/agent/poll?wait=25&known=<deployment>
                                -> { target: { commit, release, deployment } | null, actions: [...] }   (long poll)
-POST /api/agent/report         { deployment, status: "applying|done|failed|running|stopped|rolledback", message, commit }
+POST /api/agent/report         { deployment, status: "applying|done|failed|running|stopped|rolledback", message, commit, agent }
 POST /api/agent/console        { lines, backups?, running? }
 ```
+
+`agent` is the agent's `beacon` version; servers list it as `agent_version`.
 
 The hub keeps the last 2000 console lines and the backup list per server in memory only; the
 agent sends its backups and state again when it starts.
@@ -160,3 +163,19 @@ agent sends its backups and state again when it starts.
    `.beacon/backups`, and also lists world archives backup mods leave in `*backup*` folders.
 5. Players with the companion mod get an in-game toast, can compare their version with the
    server's and pull configs/resource packs live (mods are staged for the next restart).
+
+## Updates
+
+Both the app and servers update from BeaconSync's GitHub releases (`beacon-core::release`;
+`BEACON_RELEASES` points it at another releases API, e.g. a mirror or a test feed). Downloads are
+checked against the size and sha256 GitHub records for each release file.
+
+- **App.** Checks on start and every 6 hours. A button next to the logo offers the new version.
+  The first click downloads the file for this kind of install (NSIS or MSI on Windows, dmg on
+  macOS, AppImage, deb or rpm on Linux), the second installs it and restarts. Dev builds and
+  installs it can't recognise only link to the release.
+- **Servers.** The app compares each server's `agent_version` with the newest release and offers
+  "Update beacon". The agent downloads and verifies the new `beacon-<target>`, runs
+  `--version` on it, then warns players, stops Minecraft, swaps the binary and re-execs itself
+  (same pid, so systemd and docker don't notice). If anything fails before the swap, Minecraft
+  keeps running or comes back on the old `beacon`.

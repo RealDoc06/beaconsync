@@ -215,7 +215,15 @@ fn agent_hub(cfg: &ServerConfig) -> Option<Hub> {
 
 async fn report(hub: &Option<Hub>, deployment: Option<String>, status: &str, message: impl Into<String>, commit: Option<String>) {
     if let Some(h) = hub
-        && let Err(e) = h.agent_report(&AgentReport { deployment, status: status.into(), message: message.into(), commit }).await
+        && let Err(e) = h
+            .agent_report(&AgentReport {
+                deployment,
+                status: status.into(),
+                message: message.into(),
+                commit,
+                agent: Some(beacon_core::release::VERSION.into()),
+            })
+            .await
     {
         tracing::warn!("report failed: {e:#}");
     }
@@ -779,7 +787,16 @@ async fn supervise(dir: PathBuf) -> Result<()> {
                 push_state(&agent, &dir, true).await;
             }
             Some(a) = actions.recv() => {
-                if let Err(e) = act(&dir, &mut cfg, &agent, &mut mc, a).await {
+                if let ServerAction::Update(version) = a {
+                    // Only returns when the update didn't happen. Minecraft comes back if it was running.
+                    let was_running = mc.is_some();
+                    let e = self_update(&agent, &mut mc, &version).await;
+                    say(format!("beacon update failed: {e:#}"));
+                    if was_running && mc.is_none() {
+                        mc = Some(Mc::start(&dir, &cfg)?);
+                    }
+                    report(&agent, None, "running", format!("beacon update failed: {e:#}"), cfg.commit.clone()).await;
+                } else if let Err(e) = act(&dir, &mut cfg, &agent, &mut mc, a).await {
                     say(format!("failed: {e:#}"));
                 }
                 push_state(&agent, &dir, mc.is_some()).await;
@@ -891,8 +908,90 @@ async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut O
             backups::delete(dir, &id)?;
             say(format!("deleted backup {id}"));
         }
+        ServerAction::Update(_) => unreachable!("handled by supervise"),
     }
     Ok(())
+}
+
+/// Updates this `beacon` to `version` and restarts into it. The new build is downloaded and
+/// checked (GitHub's sha256, then `--version`) while Minecraft keeps running; only then are
+/// players warned and Minecraft stopped. Returns only on failure.
+async fn self_update(agent: &Option<Hub>, mc: &mut Option<Mc>, version: &str) -> anyhow::Error {
+    let staged = async {
+        use beacon_core::release;
+        if !release::newer(version, release::VERSION) {
+            bail!("already on beacon {} (asked for {version})", release::VERSION);
+        }
+        say(format!("updating beacon {} to {version}", release::VERSION));
+        report(agent, None, "applying", format!("updating beacon to {version}"), None).await;
+        let rel = release::by_version(version).await?;
+        let name = release::cli_asset();
+        let asset = rel.asset(&name).with_context(|| format!("{} has no {name}", rel.tag_name))?;
+        let exe = std::env::current_exe()?;
+        let new = exe.with_file_name(format!("{name}.new"));
+        say(format!("downloading {name} ({})", size(asset.size)));
+        release::download(asset, &new, |_| {}).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&new, fs::Permissions::from_mode(0o755))?;
+        }
+        let out = Command::new(&new).arg("--version").output().await.context("running the new beacon")?;
+        if !String::from_utf8_lossy(&out.stdout).contains(rel.version()) {
+            fs::remove_file(&new).ok();
+            bail!("the downloaded beacon does not run on this machine");
+        }
+        say("verified");
+        Ok((exe, new))
+    }
+    .await;
+    let (exe, new) = match staged {
+        Ok(paths) => paths,
+        Err(e) => return e,
+    };
+    if let Some(mut m) = mc.take() {
+        m.send("say [BeaconSync] Restarting for a BeaconSync update in 30 seconds").await;
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        m.send("say [BeaconSync] Restarting in 10 seconds").await;
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        m.stop().await;
+    }
+    say(format!("restarting on beacon {version}"));
+    match restart_into(&exe, &new) {
+        Ok(never) => match never {},
+        Err(e) => e,
+    }
+}
+
+/// Swaps the running executable for `new` and becomes it, with the same arguments. On Unix
+/// this is `exec`: same pid, so systemd and docker don't notice. Windows can rename a running
+/// exe but not replace it, so the old one moves aside and a new process takes over.
+fn restart_into(exe: &Path, new: &Path) -> Result<std::convert::Infallible> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // A link to the old build, restored if exec fails. Overwritten by the next update.
+        let old = exe.with_extension("old");
+        fs::remove_file(&old).ok();
+        fs::hard_link(exe, &old)?;
+        fs::rename(new, exe)?;
+        let e = std::process::Command::new(exe).args(&args).exec();
+        fs::rename(&old, exe).ok();
+        Err(e.into())
+    }
+    #[cfg(not(unix))]
+    {
+        let old = exe.with_extension("old.exe");
+        fs::remove_file(&old).ok();
+        fs::rename(exe, &old)?;
+        if let Err(e) = fs::rename(new, exe) {
+            fs::rename(&old, exe).ok();
+            return Err(e.into());
+        }
+        std::process::Command::new(exe).args(&args).spawn()?;
+        std::process::exit(0)
+    }
 }
 
 /// Announces, stops Minecraft, backs up, applies the new version and reports. On failure
@@ -1107,6 +1206,7 @@ pub async fn remote(t: Target, global_dir: Option<PathBuf>) -> Result<(Hub, Serv
         message: String::new(),
         last_seen: None,
         online: true,
+        agent_version: Some(beacon_core::release::VERSION.into()),
     };
     Ok((Hub::new(&url, Some(token)), server, version))
 }

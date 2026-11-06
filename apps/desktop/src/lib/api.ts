@@ -71,6 +71,10 @@ export interface Commands {
   server_console: Cmd<P<{ server: string; after: number | null }>, T.ConsoleView>
   server_action: Cmd<P<{ server: string; action: T.ServerAction }>, null>
   export_server_pack: Cmd<P<{ out: string }>, null>
+  // updates
+  update_status: Cmd<None, T.UpdateView>
+  update_download: Cmd<None, null>
+  update_install: Cmd<None, null>
 }
 
 export type Command = keyof Commands

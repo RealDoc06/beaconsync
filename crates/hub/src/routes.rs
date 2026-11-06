@@ -670,6 +670,9 @@ async fn agent_report(State(s): State<AppState>, srv: AuthServer, Json(r): Json<
     if let Some(c) = r.commit.filter(|c| hash::is_hash(c)) {
         db.execute("update servers set current_commit = ?1 where id = ?2", params![c, srv.id])?;
     }
+    // Cleared when missing: an older agent on this token can't take the update action.
+    let agent = r.agent.filter(|v| v.len() <= 64);
+    db.execute("update servers set agent_version = ?1 where id = ?2", params![agent, srv.id])?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -755,8 +758,13 @@ async fn server_action(
     Path(sid): Path<String>,
     Json(a): Json<ServerAction>,
 ) -> Result<Json<Value>> {
-    if !owned_server(&s, &u, &sid)?.online {
+    let server = owned_server(&s, &u, &sid)?;
+    if !server.online {
         return Err(Error::bad("the server is offline"));
+    }
+    // Agents that don't report a version predate `update` and would fail to read it.
+    if matches!(a, ServerAction::Update(_)) && server.agent_version.is_none() {
+        return Err(Error::bad("this server's beacon is too old to update itself; run `beacon server install` on it again"));
     }
     if let ServerAction::Command(c) = &a
         && (c.trim().is_empty() || c.contains('\n'))

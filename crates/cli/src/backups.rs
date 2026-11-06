@@ -265,8 +265,10 @@ mod tests {
         d
     }
 
+    /// Unique per test: the clock alone repeats across parallel tests on macOS (microseconds).
     fn rand_suffix() -> u64 {
-        std::time::SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     #[test]

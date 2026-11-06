@@ -1,12 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listen } from '@tauri-apps/api/event'
 import { useEffect } from 'react'
 import logo from './assets/logo.svg'
 import { Conflicts } from './components/Conflicts'
 import { Button, Dialog, ProgressBar } from './components/ui'
+import { UpdateButton } from './components/UpdateButton'
 import { call } from './lib/api'
 import { keys, useApp, type View } from './lib/store'
-import type { Progress } from './lib/types'
+import type { Progress, UpdateView } from './lib/types'
 import { ImportView } from './views/Import'
 import { JoinView } from './views/Join'
 import { LibraryView } from './views/Library'
@@ -17,11 +18,15 @@ import { SettingsView } from './views/Settings'
 export function App() {
   const view = useApp((s) => s.view)
   const set = useApp((s) => s.set)
+  const qc = useQueryClient()
 
   useEffect(() => {
-    const off = listen<Progress>('progress', (e) => set({ progress: e.payload }))
-    return () => void off.then((f) => f())
-  }, [set])
+    const offs = [
+      listen<Progress>('progress', (e) => set({ progress: e.payload })),
+      listen<UpdateView>('update', (e) => qc.setQueryData(keys.update, e.payload)),
+    ]
+    return () => offs.forEach((off) => void off.then((f) => f()))
+  }, [set, qc])
 
   return (
     <div className="flex h-full flex-col">
@@ -76,6 +81,7 @@ function Sidebar() {
       <div className="flex h-12 items-center gap-2 px-4">
         <img src={logo} alt="" className="size-6" />
         <span className="font-semibold tracking-tight">BeaconSync</span>
+        <UpdateButton />
       </div>
       <nav className="flex flex-col gap-0.5 px-2">
         {nav('library', 'Library')}

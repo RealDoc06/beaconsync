@@ -88,6 +88,7 @@ async fn publish_and_deploy_flow() {
             status: "done".into(),
             message: "ok".into(),
             commit: Some(c2.clone()),
+            agent: None,
         })
         .await
         .unwrap();
@@ -134,7 +135,8 @@ async fn rolled_back_deploys_are_not_resent() {
         .unwrap();
     let agent = Hub::new(&base, Some(s.token));
     let deploy = |release: String| DeployRequest { release, servers: DeployTargets::All(AllServers::All) };
-    let report = |status: &str| AgentReport { deployment: None, status: status.into(), message: String::new(), commit: None };
+    let report =
+        |status: &str| AgentReport { deployment: None, status: status.into(), message: String::new(), commit: None, agent: None };
 
     hub.deploy(&pack.id, &deploy(r1.id.clone())).await.unwrap();
     assert!(agent.agent_poll(0, None).await.unwrap().target.is_some());
@@ -253,4 +255,49 @@ async fn console_and_actions_are_relayed_between_owner_and_server() {
     // Only the owner can watch or control the server.
     assert!(other.console(&sid, None, 0).await.is_err());
     assert!(other.server_action(&sid, &ServerAction::Stop).await.is_err());
+}
+
+#[tokio::test]
+async fn update_is_only_relayed_to_agents_that_report_a_version() {
+    let (_tmp, base) = start().await;
+    let anon = Hub::new(&base, None);
+    let owner = Hub::new(
+        &base,
+        Some(anon.register(&Credentials { username: "doc".into(), password: "longpassword".into() }).await.unwrap().token),
+    );
+    let pack = owner
+        .create_pack(&NewPack {
+            name: "P".into(),
+            description: String::new(),
+            minecraft: "1.21.1".into(),
+            loader: Loader::default(),
+        })
+        .await
+        .unwrap();
+    let created = owner
+        .create_server(&pack.id, &NewServer { name: "S".into(), mode: ServerMode::Service, address: "x:25565".into() })
+        .await
+        .unwrap();
+    let (sid, agent) = (created.server.id.clone(), Hub::new(&base, Some(created.token)));
+    let update = ServerAction::Update("0.2.0".into());
+    let report = |agent_version: Option<&str>| AgentReport {
+        deployment: None,
+        status: "running".into(),
+        message: String::new(),
+        commit: None,
+        agent: agent_version.map(Into::into),
+    };
+
+    // An old agent can't parse `update`, so the hub refuses it.
+    agent.agent_report(&report(None)).await.unwrap();
+    assert!(owner.server_action(&sid, &update).await.is_err());
+
+    agent.agent_report(&report(Some("0.1.0"))).await.unwrap();
+    assert_eq!(owner.servers(&pack.id).await.unwrap()[0].agent_version.as_deref(), Some("0.1.0"));
+    owner.server_action(&sid, &update).await.unwrap();
+    assert_eq!(agent.agent_poll(0, None).await.unwrap().actions, vec![update.clone()]);
+
+    // An old agent taking the token back over clears the version again.
+    agent.agent_report(&report(None)).await.unwrap();
+    assert!(owner.server_action(&sid, &update).await.is_err());
 }

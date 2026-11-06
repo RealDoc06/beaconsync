@@ -2,9 +2,10 @@ import { useQuery } from '@tanstack/react-query'
 import { save } from '@tauri-apps/plugin-dialog'
 import { useState } from 'react'
 import { Button, Dialog, Empty, ErrorLine, Field, Input, Select, Toggle } from '../../components/ui'
+import { useUpdate } from '../../components/UpdateButton'
 import { call } from '../../lib/api'
 import { ago, shortId } from '../../lib/format'
-import { keys, packKeys, useAction } from '../../lib/store'
+import { askConfirm, keys, packKeys, useAction } from '../../lib/store'
 import type { PackInfo, Release, Server } from '../../lib/types'
 import { ServerPanel } from './ServerPanel'
 
@@ -31,8 +32,27 @@ export function ServersTab({ p }: { p: PackInfo }) {
     if (out) exportPack.mutate(out)
   }
   const releaseName = (commit: string | null) => (commit ? (releases.data?.find((r) => r.commit === commit)?.name ?? shortId(commit)) : 'Nothing yet')
+  const latest = useUpdate()?.latest ?? null
+  const outdated = servers.data?.filter((s) => s.online && behind(s, latest)) ?? []
+  const updateAll = useAction(
+    () => Promise.all(outdated.map((s) => call('server_action', { path, server: s.id, action: { kind: 'update', arg: latest ?? '' } }))),
+    {
+      label: 'Updating beacon',
+      invalidate: [[...keys.pack(path), 'servers']],
+      done: () => `Updating beacon on ${outdated.length} server${outdated.length === 1 ? '' : 's'}`,
+    },
+  )
   const opened = servers.data?.find((s) => s.id === open)
-  if (opened) return <ServerPanel path={path} server={opened} version={releaseName(opened.current_commit)} onBack={() => setOpen(null)} />
+  if (opened)
+    return (
+      <ServerPanel
+        path={path}
+        server={opened}
+        version={releaseName(opened.current_commit)}
+        latest={behind(opened, latest) ? latest : null}
+        onBack={() => setOpen(null)}
+      />
+    )
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
@@ -44,6 +64,21 @@ export function ServersTab({ p }: { p: PackInfo }) {
           Deploy to servers
         </Button>
         <span className="flex-1" />
+        {latest && outdated.length > 0 && (
+          <Button
+            disabled={updateAll.isPending}
+            onClick={() =>
+              askConfirm({
+                title: `Update beacon to ${latest}?`,
+                body: `${outdated.map((s) => s.name).join(', ')} download beacon ${latest} and check it, then warn players and restart Minecraft on it. Takes about a minute.`,
+                action: 'Update',
+                onConfirm: () => updateAll.mutate(undefined),
+              })
+            }
+          >
+            Update beacon on {outdated.length} server{outdated.length === 1 ? '' : 's'}
+          </Button>
+        )}
         <Button onClick={pickExport} disabled={exportPack.isPending}>
           Export server pack
         </Button>
@@ -59,6 +94,7 @@ export function ServersTab({ p }: { p: PackInfo }) {
             s={s}
             version={releaseName(s.current_commit)}
             target={releaseName(s.target_commit)}
+            latest={behind(s, latest) ? latest : null}
             onOpen={() => setOpen(s.id)}
           />
         ))}
@@ -83,7 +119,25 @@ export function ServersTab({ p }: { p: PackInfo }) {
   )
 }
 
-function ServerRow({ s, version, target, onOpen }: { s: Server; version: string; target: string; onOpen: () => void }) {
+/** True when the server's beacon isn't the newest release. Agents too old to report a version can't update themselves. */
+function behind(s: Server, latest: string | null) {
+  return !!latest && !!s.agent_version && s.agent_version !== latest
+}
+
+function ServerRow({
+  s,
+  version,
+  target,
+  latest,
+  onOpen,
+}: {
+  s: Server
+  version: string
+  target: string
+  /** Newer beacon for this server, if any. */
+  latest: string | null
+  onOpen: () => void
+}) {
   const pending = s.target_commit && s.target_commit !== s.current_commit
   const tone = s.status === 'failed' ? 'text-bad' : s.status === 'applying' || s.status === 'stopped' || pending ? 'text-warn' : 'text-muted'
   return (
@@ -91,7 +145,7 @@ function ServerRow({ s, version, target, onOpen }: { s: Server; version: string;
       type="button"
       onClick={onOpen}
       title="Console and backups"
-      className="grid h-12 w-full grid-cols-[minmax(0,1fr)_minmax(0,180px)_160px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line px-5 text-left hover:bg-hover"
+      className="grid h-12 w-full grid-cols-[minmax(0,1fr)_minmax(0,290px)_130px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line px-5 text-left hover:bg-hover"
     >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
@@ -100,10 +154,16 @@ function ServerRow({ s, version, target, onOpen }: { s: Server; version: string;
         </div>
         <div className="truncate pl-4 font-mono text-[11px] text-muted">{s.address}</div>
       </div>
-      <span className="truncate">
-        {version}
-        {pending && <span className="text-warn"> → {target}</span>}
-      </span>
+      <div className="min-w-0">
+        <div className="truncate">
+          {version}
+          {pending && <span className="text-warn"> → {target}</span>}
+        </div>
+        <div className="truncate font-mono text-[11px] text-muted">
+          beacon {s.agent_version ?? 'unknown'}
+          {latest && <span className="text-warn"> → {latest}</span>}
+        </div>
+      </div>
       <span className={`text-xs ${tone}`}>
         {s.online ? s.status : 'offline'}
         {s.last_seen && !s.online && ` · ${ago(s.last_seen)}`}

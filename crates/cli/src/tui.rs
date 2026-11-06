@@ -302,6 +302,7 @@ impl App {
             ServerAction::Backup => Some("Backing up, follow along in the console"),
             ServerAction::Restore(_) => Some("Restoring, follow along in the console"),
             ServerAction::DeleteBackup(_) => Some("Deleting"),
+            ServerAction::Update(_) => Some("Updating beacon, follow along in the console"),
         };
         tokio::spawn(async move {
             let r = hub.server_action(&id, &a).await.map(|_| label.unwrap_or_default().to_string());
