@@ -788,10 +788,11 @@ async fn supervise(dir: PathBuf) -> Result<()> {
             }
             Some(a) = actions.recv() => {
                 if let ServerAction::Update(version) = a {
-                    // Only returns when the update didn't happen. Minecraft comes back if it was stopped.
+                    // Only returns when the update didn't happen. Minecraft comes back if it was running.
+                    let was_running = mc.is_some();
                     let e = self_update(&agent, &mut mc, &version).await;
                     say(format!("beacon update failed: {e:#}"));
-                    if mc.is_none() {
+                    if was_running && mc.is_none() {
                         mc = Some(Mc::start(&dir, &cfg)?);
                     }
                     report(&agent, None, "running", format!("beacon update failed: {e:#}"), cfg.commit.clone()).await;
@@ -970,8 +971,14 @@ fn restart_into(exe: &Path, new: &Path) -> Result<std::convert::Infallible> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        // A link to the old build, restored if exec fails. Overwritten by the next update.
+        let old = exe.with_extension("old");
+        fs::remove_file(&old).ok();
+        fs::hard_link(exe, &old)?;
         fs::rename(new, exe)?;
-        Err(std::process::Command::new(exe).args(&args).exec().into())
+        let e = std::process::Command::new(exe).args(&args).exec();
+        fs::rename(&old, exe).ok();
+        Err(e.into())
     }
     #[cfg(not(unix))]
     {

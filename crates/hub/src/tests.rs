@@ -295,5 +295,9 @@ async fn update_is_only_relayed_to_agents_that_report_a_version() {
     agent.agent_report(&report(Some("0.1.0"))).await.unwrap();
     assert_eq!(owner.servers(&pack.id).await.unwrap()[0].agent_version.as_deref(), Some("0.1.0"));
     owner.server_action(&sid, &update).await.unwrap();
-    assert_eq!(agent.agent_poll(0, None).await.unwrap().actions, vec![update]);
+    assert_eq!(agent.agent_poll(0, None).await.unwrap().actions, vec![update.clone()]);
+
+    // An old agent taking the token back over clears the version again.
+    agent.agent_report(&report(None)).await.unwrap();
+    assert!(owner.server_action(&sid, &update).await.is_err());
 }

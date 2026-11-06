@@ -5,6 +5,7 @@
 //!
 //! The UI reads [`UpdateView`] with `update_status` and gets each change as an `update` event.
 
+use anyhow::Context;
 use beacon_core::release::{self, Asset, Release, VERSION};
 use serde::Serialize;
 use std::{
@@ -94,8 +95,14 @@ impl Kind {
             return Self::Dmg(bundle.to_path_buf());
         }
         if cfg!(windows) {
-            let per_user = std::env::var_os("LOCALAPPDATA").is_some_and(|d| exe.starts_with(d));
-            return if per_user { Self::Nsis } else { Self::Msi(exe) };
+            // NSIS installs per user, the MSI under Program Files. Anything else is a loose exe.
+            let under = |var: &str| std::env::var_os(var).is_some_and(|d| exe.starts_with(d));
+            if under("LOCALAPPDATA") {
+                return Self::Nsis;
+            }
+            if under("ProgramFiles") {
+                return Self::Msi(exe);
+            }
         }
         Self::External
     }
@@ -152,6 +159,26 @@ impl Updates {
         f(&mut self.inner.lock().unwrap());
         app.emit("update", self.view()).ok();
     }
+
+    /// Moves to `to` when `f` allows it, checked and set under one lock so two clicks can't
+    /// both start. `f` returns `None` when there's nothing to do.
+    fn claim<T>(
+        &self,
+        app: &AppHandle,
+        to: Phase,
+        f: impl FnOnce(&Inner) -> anyhow::Result<Option<T>>,
+    ) -> anyhow::Result<Option<T>> {
+        let out = {
+            let mut s = self.inner.lock().unwrap();
+            let out = f(&s)?;
+            if out.is_some() {
+                (s.phase, s.downloaded, s.error) = (to, 0, None);
+            }
+            out
+        };
+        app.emit("update", self.view()).ok();
+        Ok(out)
+    }
 }
 
 /// Registers the state and starts the background check.
@@ -185,17 +212,23 @@ pub fn update_status(u: State<'_, Updates>) -> UpdateView {
 /// Downloads and verifies the installer for the offered version. Progress arrives as `update` events.
 #[tauri::command]
 pub async fn update_download(app: AppHandle, u: State<'_, Updates>) -> Res<()> {
-    let (release, asset) = {
-        let s = u.inner.lock().unwrap();
-        let r = s.latest.clone().filter(|r| r.is_newer(VERSION)).ok_or_else(|| anyhow::anyhow!("no update available"))?;
-        if matches!(s.phase, Phase::Downloading | Phase::Verifying | Phase::Ready | Phase::Installing) {
-            return Ok(());
-        }
-        let a = u.kind.asset(&r).cloned().ok_or_else(|| anyhow::anyhow!("this install can't update itself"))?;
-        (r, a)
+    let dir = app.path().app_cache_dir()?.join("updates");
+    let started = u.claim(&app, Phase::Downloading, |s| {
+        let r = s.latest.clone().filter(|r| r.is_newer(VERSION)).context("no update available")?;
+        let a = u.kind.asset(&r).cloned().context("this install can't update itself")?;
+        let busy = matches!(s.phase, Phase::Downloading | Phase::Verifying | Phase::Ready | Phase::Installing);
+        Ok((!busy).then_some((r.tag_name, a)))
+    })?;
+    let Some((tag, asset)) = started else { return Ok(()) };
+    // Only while the offer is still this release: the background check may find a newer one.
+    let set = |f: &dyn Fn(&mut Inner)| {
+        u.update(&app, |s| {
+            if s.latest.as_ref().is_some_and(|r| r.tag_name == tag) {
+                f(s)
+            }
+        })
     };
-    u.update(&app, |s| (s.phase, s.downloaded, s.error) = (Phase::Downloading, 0, None));
-    let dest = app.path().app_cache_dir()?.join("updates").join(&asset.name);
+    let dest = dir.join(&asset.name);
     let percent = Mutex::new(0);
     let result = release::download(&asset, &dest, |done| {
         // At most one event per percent.
@@ -204,16 +237,14 @@ pub async fn update_download(app: AppHandle, u: State<'_, Updates>) -> Res<()> {
         if p != *last {
             *last = p;
             let phase = if done == asset.size { Phase::Verifying } else { Phase::Downloading };
-            u.update(&app, |s| (s.phase, s.downloaded) = (phase, done));
+            set(&|s| (s.phase, s.downloaded) = (phase, done));
         }
     })
     .await;
-    let still = u.inner.lock().unwrap().latest.as_ref().is_some_and(|r| r.tag_name == release.tag_name);
     match result {
-        Ok(()) if still => u.update(&app, |s| (s.phase, s.file) = (Phase::Ready, Some(dest))),
-        Ok(()) => {}
+        Ok(()) => set(&|s| (s.phase, s.file) = (Phase::Ready, Some(dest.clone()))),
         Err(e) => {
-            u.update(&app, |s| (s.phase, s.error) = (Phase::Failed, Some(format!("{e:#}"))));
+            set(&|s| (s.phase, s.error) = (Phase::Failed, Some(format!("{e:#}"))));
             return Err(e.into());
         }
     }
@@ -223,16 +254,13 @@ pub async fn update_download(app: AppHandle, u: State<'_, Updates>) -> Res<()> {
 /// Installs the downloaded update and restarts into it.
 #[tauri::command]
 pub async fn update_install(app: AppHandle, u: State<'_, Updates>) -> Res<()> {
-    let file = {
-        let s = u.inner.lock().unwrap();
-        s.file.clone().filter(|_| s.phase == Phase::Ready).ok_or_else(|| anyhow::anyhow!("the update isn't downloaded"))?
-    };
-    u.update(&app, |s| s.phase = Phase::Installing);
+    let file = u
+        .claim(&app, Phase::Installing, |s| Ok(s.file.clone().filter(|_| s.phase == Phase::Ready)))?
+        .context("the update isn't downloaded")?;
     let kind = u.kind.clone();
-    let installed = tauri::async_runtime::spawn_blocking(move || install(&kind, &file)).await?;
-    match installed {
-        Ok(mut relaunch) => {
-            relaunch.spawn()?;
+    let installed = tauri::async_runtime::spawn_blocking(move || install(&kind, &file)).await;
+    match installed.map_err(anyhow::Error::from).and_then(|r| Ok(r?.spawn()?)) {
+        Ok(_) => {
             app.exit(0);
             Ok(())
         }
@@ -247,7 +275,7 @@ pub async fn update_install(app: AppHandle, u: State<'_, Updates>) -> Res<()> {
 /// Applies `file` and returns the command that starts the updated app (or the installer that
 /// does). The caller runs it and quits.
 fn install(kind: &Kind, file: &Path) -> anyhow::Result<Command> {
-    use anyhow::{Context, bail, ensure};
+    use anyhow::{bail, ensure};
     let run = |c: &mut Command| -> anyhow::Result<()> {
         let out = c.output().with_context(|| format!("running {c:?}"))?;
         ensure!(out.status.success(), "{c:?} failed: {}", String::from_utf8_lossy(&out.stderr).trim());

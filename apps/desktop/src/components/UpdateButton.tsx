@@ -49,14 +49,19 @@ export function UpdateButton() {
   }
 
   return (
-    <div className="relative ml-auto" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <div
+      className="relative ml-auto"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      // Stays open while focus moves into the panel (Tab to "Release on GitHub").
+      onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setOpen(false)}
+    >
       <button
         type="button"
         aria-label={text.label(offer, pct)}
         aria-busy={busy}
         onClick={() => void act()}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setOpen(false)}
         className={`relative grid size-7 place-items-center rounded-md hover:bg-hover ${tone}`}
       >
         {(busy || offer.phase === 'ready') && (

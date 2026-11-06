@@ -9,9 +9,12 @@ use sha2::{Digest, Sha256};
 use std::{
     io::Write,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 const API: &str = "https://api.github.com/repos/RealDoc06/beaconsync/releases";
+/// How long a download may go without receiving data.
+const STALL: Duration = Duration::from_secs(60);
 
 /// The version this build of BeaconSync is.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -59,6 +62,7 @@ async fn get(url: String) -> Result<Release> {
     let resp = crate::http()
         .get(&url)
         .header("Accept", "application/vnd.github+json")
+        .timeout(Duration::from_secs(30))
         .send()
         .await
         .context("checking for BeaconSync updates")?;
@@ -86,7 +90,8 @@ pub async fn download(asset: &Asset, dest: &Path, on: impl Fn(u64)) -> Result<()
     let part = PathBuf::from(format!("{}.part", dest.display()));
     let mut file = std::fs::File::create(&part)?;
     let (mut hash, mut done) = (Sha256::new(), 0u64);
-    while let Some(chunk) = resp.chunk().await? {
+    // A stalled connection fails instead of hanging the app or the server agent.
+    while let Some(chunk) = tokio::time::timeout(STALL, resp.chunk()).await.context("the download stalled")?? {
         done += chunk.len() as u64;
         if done > asset.size {
             break;

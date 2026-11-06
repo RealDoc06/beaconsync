@@ -670,9 +670,9 @@ async fn agent_report(State(s): State<AppState>, srv: AuthServer, Json(r): Json<
     if let Some(c) = r.commit.filter(|c| hash::is_hash(c)) {
         db.execute("update servers set current_commit = ?1 where id = ?2", params![c, srv.id])?;
     }
-    if let Some(v) = r.agent.filter(|v| v.len() <= 64) {
-        db.execute("update servers set agent_version = ?1 where id = ?2", params![v, srv.id])?;
-    }
+    // Cleared when missing: an older agent on this token can't take the update action.
+    let agent = r.agent.filter(|v| v.len() <= 64);
+    db.execute("update servers set agent_version = ?1 where id = ?2", params![agent, srv.id])?;
     Ok(Json(json!({ "ok": true })))
 }
 
