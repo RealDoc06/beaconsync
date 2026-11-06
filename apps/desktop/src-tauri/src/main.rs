@@ -1,6 +1,7 @@
 //! BeaconSync desktop: a thin Tauri layer over `beacon-core`.
 //! Commands live in `library` (instances, imports, joins), `pack` (one pack's files,
-//! changes and history) and `hub` (settings, account, publish, deploy).
+//! changes and history), `hub` (settings, account, publish, deploy) and `updates` (the app
+//! updating itself).
 //! The TypeScript mirror of every command is `src/lib/api.ts`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -10,13 +11,15 @@ mod automation;
 mod hub;
 mod library;
 mod pack;
+mod updates;
 mod util;
 
 fn main() {
     tauri::Builder::default()
-        .setup(|_app| {
+        .setup(|app| {
+            updates::start(app.handle());
             #[cfg(feature = "automation")]
-            automation::start(_app.handle().clone());
+            automation::start(app.handle().clone());
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -77,6 +80,9 @@ fn main() {
             hub::server_console,
             hub::server_action,
             hub::export_server_pack,
+            updates::update_status,
+            updates::update_download,
+            updates::update_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running BeaconSync");

@@ -123,6 +123,9 @@ pub struct Server {
     pub message: String,
     pub last_seen: Option<i64>,
     pub online: bool,
+    /// Version of `beacon` the server runs; unknown for agents older than 0.1.0-alpha.2.
+    #[serde(default)]
+    pub agent_version: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -222,6 +225,8 @@ pub enum ServerAction {
     /// Restore a backup by id (stops and restarts Minecraft).
     Restore(String),
     DeleteBackup(String),
+    /// Update `beacon` itself to this BeaconSync version; Minecraft restarts.
+    Update(String),
 }
 
 /// A backup on a server: BeaconSync's own or one written by a backup mod (FTB Backups...).
@@ -265,6 +270,9 @@ pub struct AgentReport {
     pub status: String,
     pub message: String,
     pub commit: Option<String>,
+    /// The agent's `beacon` version.
+    #[serde(default)]
+    pub agent: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -86,7 +86,8 @@ create table if not exists library (
 "#;
 
 /// Columns added after the first release; applied when missing.
-const MIGRATIONS: &[&str] = &["alter table servers add column failed_deployment text"];
+const MIGRATIONS: &[&str] =
+    &["alter table servers add column failed_deployment text", "alter table servers add column agent_version text"];
 
 pub fn open(path: &std::path::Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
@@ -128,7 +129,7 @@ pub fn sha256(s: &str) -> String {
 pub const ONLINE_SECS: i64 = 90;
 
 pub const SERVER_COLS: &str =
-    "id, name, mode, address, current_commit, target_commit, target_release, status, message, last_seen";
+    "id, name, mode, address, current_commit, target_commit, target_release, status, message, last_seen, agent_version";
 
 pub fn server_row(r: &Row) -> rusqlite::Result<Server> {
     let mode: String = r.get(2)?;
@@ -147,6 +148,7 @@ pub fn server_row(r: &Row) -> rusqlite::Result<Server> {
         message: r.get(8)?,
         last_seen,
         online,
+        agent_version: r.get(10)?,
     })
 }
 

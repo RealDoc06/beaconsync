@@ -187,6 +187,8 @@ export interface Server {
   message: string
   last_seen: number | null
   online: boolean
+  /** Version of `beacon` the server runs; null for agents too old to report it (and to update themselves). */
+  agent_version: string | null
 }
 
 /** Mirrors `api::ServerAction` (serde tag "kind", content "arg"). */
@@ -194,6 +196,8 @@ export type ServerAction =
   | { kind: 'command'; arg: string }
   | { kind: 'start' | 'stop' | 'restart' | 'backup' }
   | { kind: 'restore' | 'delete_backup'; arg: string }
+  /** Update the server's `beacon` to this BeaconSync version. */
+  | { kind: 'update'; arg: string }
 
 export interface Backup {
   /** Path relative to the server folder. */
@@ -303,4 +307,24 @@ export interface Progress {
   done: number
   total: number
   label: string
+}
+
+/** Mirrors `updates::UpdateView`: the app updating itself. Pushed as the `update` event. */
+export interface UpdateView {
+  current: string
+  /** Newest BeaconSync release, also offered to servers. */
+  latest: string | null
+  /** Set when `latest` is newer than this app. */
+  offer: {
+    version: string
+    /** Release notes, markdown. */
+    notes: string
+    /** GitHub release page. */
+    url: string
+    /** `external`: this install can't update itself, so the button opens `url`. */
+    phase: 'available' | 'external' | 'downloading' | 'verifying' | 'ready' | 'installing' | 'failed'
+    downloaded: number
+    total: number
+    error: string | null
+  } | null
 }

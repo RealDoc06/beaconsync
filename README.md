@@ -53,6 +53,9 @@ More in [docs/screenshots](docs/screenshots).
 - **Server management.** From the app or the CLI, on any machine: watch the live console and send
   commands, start, stop and restart, and back up, restore or delete backups. Backups made by mods
   like FTB Backups or Simple Backups show up next to BeaconSync's own.
+- **Updates.** The app updates itself from GitHub releases (download, verify, restart) and
+  updates `beacon` on your servers with one click: each server checks the new build, warns
+  players and restarts on it.
 - **Players.** Friends join with a share code or link. The companion mod shows an in-game toast
   when an update is out, tells you if you match the server's version, and `/beacon pull` applies
   configs and resource packs live (mods are staged for the next restart). After a deploy players

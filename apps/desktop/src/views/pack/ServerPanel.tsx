@@ -47,7 +47,20 @@ function size(bytes: number) {
   return `${(bytes / (1 << 30)).toFixed(1)} GB`
 }
 
-export function ServerPanel({ path, server, version, onBack }: { path: string; server: Server; version: string; onBack: () => void }) {
+export function ServerPanel({
+  path,
+  server,
+  version,
+  latest,
+  onBack,
+}: {
+  path: string
+  server: Server
+  version: string
+  /** Newer beacon this server can update to. */
+  latest: string | null
+  onBack: () => void
+}) {
   const live = useConsole(path, server.id)
   const [tab, setTab] = useState<'console' | 'backups'>('console')
   const set = useApp((s) => s.set)
@@ -70,10 +83,25 @@ export function ServerPanel({ path, server, version, onBack }: { path: string; s
         </Button>
         <span className={tone}>●</span>
         <span className="font-semibold">{server.name}</span>
-        <span className="text-xs text-muted">
-          {state} · {version} · <span className="font-mono">{server.address}</span>
+        <span className="min-w-0 truncate text-xs text-muted">
+          {state} · {version} · <span className="font-mono">{server.address}</span> · beacon {server.agent_version ?? 'unknown'}
         </span>
         <span className="flex-1" />
+        {latest && (
+          <Button
+            disabled={!live.online}
+            onClick={() =>
+              askConfirm({
+                title: `Update beacon to ${latest}?`,
+                body: 'The server downloads and checks the new beacon, then warns players and restarts Minecraft on it. Takes about a minute.',
+                action: 'Update',
+                onConfirm: () => void send({ kind: 'update', arg: latest }, 'Updating beacon. Follow along in the console.'),
+              })
+            }
+          >
+            Update beacon
+          </Button>
+        )}
         {live.running ? (
           <Button
             disabled={!live.online}
