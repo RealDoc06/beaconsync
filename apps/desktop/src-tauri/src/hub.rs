@@ -5,7 +5,7 @@ use anyhow::{Context, anyhow};
 use beacon_core::{
     api::{AllServers, ConsoleView, Credentials, DeployRequest, DeployResponse, DeployTargets, Release, Server, ServerAction},
     hub::Hub,
-    instance, ops, server,
+    ops, prism, server,
     settings::Settings,
 };
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,8 @@ pub struct SettingsView {
     instances_dir: PathBuf,
     instances_custom: bool,
     prism_path: Option<PathBuf>,
-    prism_found: bool,
+    /// Which Prism plays the game: installed, built in, or none.
+    prism: prism::Kind,
 }
 
 #[tauri::command]
@@ -38,7 +39,7 @@ pub async fn get_settings() -> Res<SettingsView> {
         curseforge_key: s.curseforge_key.clone().unwrap_or_default(),
         instances_dir: s.instances_root(),
         instances_custom: s.instances_dir.is_some(),
-        prism_found: instance::prism_command(s.prism_path.as_deref()).is_some(),
+        prism: prism::kind(&s),
         prism_path: s.prism_path,
     })
 }
@@ -68,6 +69,58 @@ pub async fn save_settings(form: SettingsForm) -> Res<()> {
     s.prism_path = opt(form.prism_path).map(PathBuf::from);
     s.save()?;
     Ok(())
+}
+
+#[derive(Serialize)]
+pub struct MinecraftAccounts {
+    accounts: Vec<prism::Account>,
+    /// Account the game starts with: the one picked in BeaconSync, else Prism's default.
+    selected: Option<String>,
+    /// Which Prism holds them. Built-in accounts are added and removed from BeaconSync.
+    prism: prism::Kind,
+}
+
+/// Minecraft accounts signed in to Prism.
+#[tauri::command]
+pub async fn minecraft_accounts() -> Res<MinecraftAccounts> {
+    let s = Settings::load();
+    let accounts = prism::accounts::list(&s);
+    let picked = s.minecraft_account.clone().filter(|n| accounts.iter().any(|a| &a.name == n));
+    let selected = picked.or_else(|| accounts.iter().find(|a| a.default).map(|a| a.name.clone()));
+    Ok(MinecraftAccounts { accounts, selected, prism: prism::kind(&s) })
+}
+
+#[tauri::command]
+pub async fn set_minecraft_account(name: String) -> Res<()> {
+    let mut s = Settings::load();
+    s.minecraft_account = Some(name);
+    s.save()?;
+    Ok(())
+}
+
+/// Signs a Microsoft account in to the built-in Prism and plays with it from now on. Null when
+/// the player closed the sign-in.
+#[tauri::command]
+pub async fn add_minecraft_account(app: AppHandle) -> Res<Option<prism::Account>> {
+    let added = prism::accounts::sign_in(&Settings::load(), &progress(&app)).await?;
+    if let Some(a) = &added {
+        // Reloaded: settings may have changed during the sign-in.
+        let mut s = Settings::load();
+        s.minecraft_account = Some(a.name.clone());
+        s.save()?;
+    }
+    Ok(added)
+}
+
+#[tauri::command]
+pub async fn remove_minecraft_account(name: String) -> Res<()> {
+    Ok(prism::accounts::remove(&Settings::load(), &name)?)
+}
+
+/// Opens the installed Prism, where its accounts are managed.
+#[tauri::command]
+pub async fn open_prism() -> Res<()> {
+    Ok(prism::open_installed(&Settings::load())?)
 }
 
 /// Signs in (or creates an account when `create`) and stores the token.

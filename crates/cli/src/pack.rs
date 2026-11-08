@@ -10,7 +10,7 @@ use beacon_core::{
     hub::{self, Hub},
     import, instance, meta,
     model::{Loader, LoaderKind},
-    ops,
+    ops, prism,
     repo::{self, Repo, Role},
     server,
     settings::Settings,
@@ -471,7 +471,10 @@ pub async fn export(dir: &Path, kind: ExportKind, out: &Path) -> Result<()> {
 pub async fn play(dir: &Path) -> Result<()> {
     let repo = find(dir)?;
     let server = ops::server_address(&repo).await;
-    instance::launch(&repo.root, Settings::load().prism_path.as_deref(), server.as_deref())?;
-    ui::ok("Launching with Prism Launcher");
+    let bar = Bar::new();
+    // The game keeps running after beacon exits.
+    drop(prism::launch(&repo.root, &Settings::load(), server.as_deref(), &|p| bar.update(p)).await?);
+    bar.done();
+    ui::ok("Starting Minecraft");
     Ok(())
 }

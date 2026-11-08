@@ -37,7 +37,12 @@ More in [docs/screenshots](docs/screenshots).
 
 - **Library like Prism Launcher.** Create packs (Vanilla, Fabric, Quilt, Forge, NeoForge), import
   `.mrpack`, CurseForge zips, Prism exports or existing Prism instances, browse Modrinth (and
-  CurseForge with an API key). Instances live in Prism's folder, so Prism launches them.
+  CurseForge with an API key). Your Prism instances show up in the library, ready to play.
+- **Prism built in.** No separate launcher to install or open: Play downloads Prism the first
+  time and starts the game directly. An installed Prism is used instead, with its accounts.
+  Pick the Minecraft account from the sidebar; with the built-in Prism, add (only Microsoft's
+  sign-in shows) and remove them there too, while an installed Prism manages its own. Set memory
+  per pack, and crashes are reported in the app.
 - **Versions like git.** See unsaved changes, undo them, save a version, view history, roll back
   to any version (for players and servers too: it is published and deployed), branches and merges. Mods are matched by project, so an updated mod shows
   as one change.
@@ -150,8 +155,10 @@ cd mods/companion-fabric && ./gradlew build
 
 ## Notes
 
-- Playing goes through [Prism Launcher](https://prismlauncher.org) (it handles Microsoft accounts
-  and game files). BeaconSync instances are regular Prism instances with a `.beacon` folder.
+- Playing goes through [Prism Launcher](https://prismlauncher.org) (it handles Microsoft accounts,
+  Java and game files): yours if installed, else a portable copy BeaconSync downloads on first play
+  (its first run only asks you to sign in). BeaconSync instances are regular Prism instances with a
+  `.beacon` folder.
 - CurseForge needs your own API key (Settings), because CurseForge requires one per app.
 - The in-game companion is Fabric only for now (Quilt loads it too), built for 1.21.1 and 26.3.
 

@@ -17,7 +17,7 @@ use beacon_core::{
     hash::short,
     hub::Hub,
     instance::{self, InstanceInfo},
-    ops,
+    ops, prism,
     repo::{BranchInfo, LogEntry, PackConfig, Repo, Role, Status},
     settings::Settings,
 };
@@ -489,10 +489,13 @@ impl App {
         match (c, self.tab) {
             ('P', _) => {
                 let path = repo.root.clone();
-                self.spawn("Launching", move |_| async move {
+                self.spawn("Launching", move |tx| async move {
                     let server = ops::server_address(&repo).await;
-                    instance::launch(&path, Settings::load().prism_path.as_deref(), server.as_deref())?;
-                    Ok("Launched with Prism Launcher".into())
+                    let on = move |p| drop(tx.send(Msg::Progress(p)));
+                    let session = prism::launch(&path, &Settings::load(), server.as_deref(), &on).await?;
+                    // Reaps Prism when it exits, so the long running TUI leaves no zombie.
+                    std::thread::spawn(move || session.wait());
+                    Ok("Minecraft is starting".into())
                 });
             }
             ('u', _) if l.cfg.role == Role::Subscriber => self.spawn("Updating", move |tx| async move {

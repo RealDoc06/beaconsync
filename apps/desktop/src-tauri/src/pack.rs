@@ -10,6 +10,7 @@ use beacon_core::{
     merge::{Conflict, Pick},
     model::{Entry, LoaderKind, Side, Source, Tree, enabled_path, is_disabled, is_mod_path},
     ops::{self, UpdateInfo, UpstreamInfo},
+    prism,
     repo::{BranchInfo, LogEntry, PackConfig, Repo, Status},
     settings::Settings,
     sources::modrinth::{self, ProjectType, Update},
@@ -19,7 +20,7 @@ use std::{
     collections::HashSet,
     path::{Path, PathBuf},
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 #[derive(Serialize)]
 pub struct PackInfo {
@@ -336,12 +337,33 @@ pub async fn update_subscribed(app: AppHandle, path: String) -> Res<UpdateInfo> 
 // ---- header actions ---------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn launch(path: String) -> Res<()> {
+pub async fn launch(app: AppHandle, path: String) -> Res<()> {
     let server = match open(&path) {
         Ok(repo) => beacon_core::ops::server_address(&repo).await,
         Err(_) => None,
     };
-    Ok(instance::launch(Path::new(&path), Settings::load().prism_path.as_deref(), server.as_deref())?)
+    let session = prism::launch(Path::new(&path), &Settings::load(), server.as_deref(), &progress(&app)).await?;
+    // The built-in Prism keeps its console closed when things go wrong, so the app tells the player.
+    std::thread::spawn(move || {
+        if let Some(failure) = session.wait() {
+            app.emit("game-failed", failure).ok();
+        }
+    });
+    Ok(())
+}
+
+/// Memory (MB) set for the instance, or null for Prism's default.
+#[tauri::command]
+pub async fn instance_memory(path: String) -> Res<Option<u32>> {
+    Ok(instance::memory(Path::new(&path)))
+}
+
+#[tauri::command]
+pub async fn set_instance_memory(path: String, mb: Option<u32>) -> Res<()> {
+    if prism::busy() {
+        return Err(anyhow!("Close Minecraft before changing its memory").into());
+    }
+    Ok(instance::set_memory(Path::new(&path), mb)?)
 }
 
 #[tauri::command]

@@ -7,6 +7,7 @@
 //! - [`import`]: `.mrpack`, CurseForge zips and existing instances
 //! - [`server`]: server pack builder, Java runtimes, loader installers
 //! - [`hub`]: HTTP client for `beacon-hub`, plus push/fetch of objects
+//! - [`prism`]: installed or built-in Prism Launcher, which plays the game
 //! - [`release`]: BeaconSync's own GitHub releases, for app and server updates
 
 pub mod api;
@@ -21,6 +22,7 @@ pub mod merge;
 pub mod meta;
 pub mod model;
 pub mod ops;
+pub mod prism;
 pub mod release;
 pub mod repo;
 pub mod server;

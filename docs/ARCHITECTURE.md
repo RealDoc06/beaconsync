@@ -22,7 +22,24 @@ An instance is a Prism Launcher compatible folder, so Prism can launch it direct
   .beacon/            BeaconSync repo (ignored by Prism)
 ```
 
-When Prism is installed, BeaconSync creates instances inside Prism's `instances/` folder.
+When Prism is installed, BeaconSync creates instances inside Prism's `instances/` folder and
+launches them with it. Otherwise Play downloads a pinned portable Prism (checksummed) into
+`<data>/beaconsync/prism/<version>/`, runs it with `--dir <data>/beaconsync/prism/data` and points
+its `InstanceDir` at BeaconSync's instances folder (`crates/core/src/prism/`).
+
+Players never see the built-in Prism's window:
+
+- `--launch` starts the game without it; Prism quits when the game does.
+- Adding an account runs a throwaway Prism on an empty data folder, which opens straight on the
+  Microsoft sign-in. Once it saves the account, BeaconSync closes it and copies the entry into
+  the real `accounts.json` (owner-only, like Prism writes it). Removing edits that file. Both
+  are refused while a Prism started by the app is running, since Prism rewrites its files, and
+  Play is refused while a sign-in runs; the player retries afterwards.
+- Play passes the account picked in BeaconSync with `--profile`.
+- Its console stays closed when things go wrong (`ShowConsoleOnError=false`); BeaconSync waits
+  for Prism to exit and reports a crash report the game wrote meanwhile, or, when Prism exits
+  with an error, the game's or Prism's log.
+- Memory is set per instance in `instance.cfg` (`OverrideMemory`, `MaxMemAlloc`).
 
 ## Repo layout (`<instance>/.beacon/`)
 

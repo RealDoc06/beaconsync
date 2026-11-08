@@ -66,7 +66,7 @@ function Row({ item }: { item: LibraryItem }) {
     invalidate: [keys.library],
     done: `${item.name} is now tracked`,
   })
-  const play = useAction(() => call('launch', { path: item.path }), { label: 'Starting Prism Launcher', done: 'Prism Launcher started' })
+  const play = useAction(() => call('launch', { path: item.path }), { label: 'Starting Minecraft', done: 'Minecraft is starting' })
 
   return (
     <div
@@ -92,15 +92,14 @@ function Row({ item }: { item: LibraryItem }) {
         {badges.data?.update && <Tag tone="accent">Update available</Tag>}
       </div>
       <div className="flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-        {item.tracked ? (
-          <Button small onClick={() => play.mutate(undefined)}>
-            Play
-          </Button>
-        ) : (
-          <Button small onClick={() => track.mutate(undefined)} disabled={track.isPending}>
-            Track with BeaconSync
+        {!item.tracked && (
+          <Button small onClick={() => track.mutate(undefined)} disabled={track.isPending} title="Track with BeaconSync">
+            Track
           </Button>
         )}
+        <Button small onClick={() => play.mutate(undefined)} disabled={play.isPending}>
+          Play
+        </Button>
       </div>
     </div>
   )

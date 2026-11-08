@@ -39,7 +39,8 @@ function SettingsBody({ s }: { s: Settings }) {
   })
   const save = useAction(() => call('save_settings', { form }), {
     label: 'Saving settings',
-    invalidate: [keys.settings, keys.library],
+    // The Prism path decides which Prism's accounts are listed.
+    invalidate: [keys.settings, keys.library, keys.accounts],
     done: 'Settings saved',
   })
   const browse = async (k: 'instances_dir' | 'prism_path') => {
@@ -74,10 +75,10 @@ function SettingsBody({ s }: { s: Settings }) {
         </Field>
         <Field
           label="Prism Launcher"
-          hint={s.prism_found ? <Tag tone="ok">Prism Launcher found</Tag> : <Tag tone="warn">Prism Launcher not found. Install it from prismlauncher.org to play.</Tag>}
+          hint={PRISM_HINT[s.prism]}
         >
           <div className="flex gap-2">
-            <Input {...field('prism_path')} placeholder="Detect automatically" className="flex-1" />
+            <Input {...field('prism_path')} placeholder="Use installed, else built in" className="flex-1" />
             <Button onClick={() => browse('prism_path')}>Browse</Button>
           </div>
         </Field>
@@ -162,4 +163,10 @@ function ApproveDevice() {
       </div>
     </Field>
   )
+}
+
+const PRISM_HINT: Record<Settings['prism'], ReactNode> = {
+  installed: <Tag tone="ok">Using your Prism Launcher</Tag>,
+  built_in: <Tag tone="ok">Built in. Downloaded the first time you play</Tag>,
+  missing: <Tag tone="warn">No built-in Prism for this computer. Install it from prismlauncher.org to play</Tag>,
 }
