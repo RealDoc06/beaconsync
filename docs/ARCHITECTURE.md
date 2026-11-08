@@ -33,8 +33,8 @@ Players never see the built-in Prism's window:
 - Adding an account runs a throwaway Prism on an empty data folder, which opens straight on the
   Microsoft sign-in. Once it saves the account, BeaconSync closes it and copies the entry into
   the real `accounts.json` (owner-only, like Prism writes it). Removing edits that file. Both
-  wait until no Prism started by the app is running, since Prism rewrites its files, and Play
-  waits for a sign-in to finish.
+  are refused while a Prism started by the app is running, since Prism rewrites its files, and
+  Play is refused while a sign-in runs; the player retries afterwards.
 - Play passes the account picked in BeaconSync with `--profile`.
 - Its console stays closed when things go wrong (`ShowConsoleOnError=false`); BeaconSync waits
   for Prism to exit and reports a crash report the game wrote meanwhile, or, when Prism exits

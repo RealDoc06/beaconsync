@@ -203,7 +203,6 @@ const MANAGE = ':manage'
 /** Picks the Minecraft account Play uses. Built-in Prism accounts are added (through Prism's
  * sign-in page only) and removed here; an installed Prism manages its own. */
 function MinecraftAccount() {
-  const qc = useQueryClient()
   const accounts = useQuery({ queryKey: keys.accounts, queryFn: () => call('minecraft_accounts'), staleTime: 5_000 })
   const invalidate = [keys.accounts]
   const add = useAction(() => call('add_minecraft_account'), {
@@ -212,13 +211,14 @@ function MinecraftAccount() {
     done: (a) => (a ? `Playing as ${a.name}` : ''),
   })
   const remove = useAction((name: string) => call('remove_minecraft_account', { name }), { label: 'Removing account', invalidate })
+  const select = useAction((name: string) => call('set_minecraft_account', { name }), { label: 'Switching account', invalidate })
   const manage = useAction(() => call('open_prism'), { label: 'Opening Prism Launcher', done: 'Manage accounts in Prism under Accounts' })
   const data = accounts.data
   const list = data?.accounts ?? []
   const builtIn = data?.prism === 'built_in'
   const addOrManage = () => (builtIn ? add.mutate(undefined) : manage.mutate(undefined))
 
-  const pick = async (value: string) => {
+  const pick = (value: string) => {
     if (value === ADD || value === MANAGE) return addOrManage()
     if (value === REMOVE && data?.selected) {
       const name = data.selected
@@ -230,8 +230,7 @@ function MinecraftAccount() {
         onConfirm: () => remove.mutate(name),
       })
     }
-    await call('set_minecraft_account', { name: value })
-    await qc.invalidateQueries({ queryKey: keys.accounts })
+    select.mutate(value)
   }
 
   return (

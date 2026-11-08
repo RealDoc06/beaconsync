@@ -40,8 +40,9 @@ More in [docs/screenshots](docs/screenshots).
   CurseForge with an API key). Your Prism instances show up in the library, ready to play.
 - **Prism built in.** No separate launcher to install or open: Play downloads Prism the first
   time and starts the game directly. An installed Prism is used instead, with its accounts.
-  Pick, add and remove Minecraft accounts from the sidebar (adding shows only Microsoft's
-  sign-in), set memory per pack, and crashes are reported in the app.
+  Pick the Minecraft account from the sidebar; with the built-in Prism, add (only Microsoft's
+  sign-in shows) and remove them there too, while an installed Prism manages its own. Set memory
+  per pack, and crashes are reported in the app.
 - **Versions like git.** See unsaved changes, undo them, save a version, view history, roll back
   to any version (for players and servers too: it is published and deployed), branches and merges. Mods are matched by project, so an updated mod shows
   as one change.

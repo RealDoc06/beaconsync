@@ -39,7 +39,8 @@ function SettingsBody({ s }: { s: Settings }) {
   })
   const save = useAction(() => call('save_settings', { form }), {
     label: 'Saving settings',
-    invalidate: [keys.settings, keys.library],
+    // The Prism path decides which Prism's accounts are listed.
+    invalidate: [keys.settings, keys.library, keys.accounts],
     done: 'Settings saved',
   })
   const browse = async (k: 'instances_dir' | 'prism_path') => {
