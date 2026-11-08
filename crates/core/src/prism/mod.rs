@@ -110,7 +110,7 @@ impl Session {
             child,
             _running: running,
             game_dir: game_dir(instance),
-            prism_log: prism_data.map(|d| d.join("logs").join("PrismLauncher-0.log")).filter(|p| p.is_file()),
+            prism_log: prism_data.map(|d| d.join("logs").join("PrismLauncher-0.log")),
             started: SystemTime::now(),
         })
     }
@@ -126,7 +126,9 @@ impl Session {
         // Prism exits with 1 when the launch fails and its console stays closed.
         let game_log = self.game_dir.join("logs").join("latest.log");
         let fresh = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).is_ok_and(|m| m >= self.started);
-        (!ok).then(|| Failure::Failed { log: Some(game_log).filter(|p| fresh(p)).or(self.prism_log.take()) })
+        (!ok).then(|| Failure::Failed {
+            log: Some(game_log).filter(|p| fresh(p)).or(self.prism_log.take().filter(|p| p.is_file())),
+        })
     }
 }
 
@@ -174,7 +176,12 @@ pub async fn launch(instance: &Path, s: &Settings, server: Option<&str>, on: OnP
 
 /// Opens the installed Prism's window, where players manage its accounts.
 pub fn open_installed(s: &Settings) -> Result<()> {
-    installed(s.prism_path.as_deref()).context("Prism Launcher is not installed")?.spawn().context("starting Prism Launcher")?;
+    let mut child = installed(s.prism_path.as_deref())
+        .context("Prism Launcher is not installed")?
+        .spawn()
+        .context("starting Prism Launcher")?;
+    // Reaped when the player closes it, so the app leaves no zombie behind.
+    std::thread::spawn(move || child.wait());
     Ok(())
 }
 
