@@ -492,7 +492,9 @@ impl App {
                 self.spawn("Launching", move |tx| async move {
                     let server = ops::server_address(&repo).await;
                     let on = move |p| drop(tx.send(Msg::Progress(p)));
-                    drop(prism::launch(&path, &Settings::load(), server.as_deref(), &on).await?);
+                    let session = prism::launch(&path, &Settings::load(), server.as_deref(), &on).await?;
+                    // Reaps Prism when it exits, so the long running TUI leaves no zombie.
+                    std::thread::spawn(move || session.wait());
                     Ok("Minecraft is starting".into())
                 });
             }

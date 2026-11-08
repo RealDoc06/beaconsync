@@ -58,9 +58,25 @@ fn uses_builtin(s: &Settings) -> bool {
 /// started from another BeaconSync process (the CLI) is not counted.
 static RUNNING: AtomicUsize = AtomicUsize::new(0);
 
-/// True while a Prism started here is running.
+/// True while a Prism started here is running or about to (Play pressed, Prism downloading).
 pub fn busy() -> bool {
     RUNNING.load(Ordering::SeqCst) > 0
+}
+
+/// Counts toward [`busy`] from the moment Play is pressed until Prism exits.
+struct Running;
+
+impl Running {
+    fn new() -> Self {
+        RUNNING.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// Set while [`accounts::sign_in`] runs. Play waits for it: a Prism started meanwhile would
@@ -80,6 +96,7 @@ pub enum Failure {
 /// A Prism process started by [`launch`]. Dropping it leaves Prism and the game running.
 pub struct Session {
     child: Child,
+    _running: Running,
     game_dir: PathBuf,
     /// Prism's own log, for launches that fail before the game writes one.
     prism_log: Option<PathBuf>,
@@ -87,13 +104,13 @@ pub struct Session {
 }
 
 impl Session {
-    fn start(mut cmd: Command, instance: &Path, prism_data: Option<PathBuf>) -> Result<Self> {
+    fn start(mut cmd: Command, running: Running, instance: &Path, prism_data: Option<PathBuf>) -> Result<Self> {
         let child = cmd.spawn().context("starting Prism Launcher")?;
-        RUNNING.fetch_add(1, Ordering::SeqCst);
         Ok(Self {
             child,
+            _running: running,
             game_dir: game_dir(instance),
-            prism_log: prism_data.map(|d| d.join("logs").join("PrismLauncher-0.log")),
+            prism_log: prism_data.map(|d| d.join("logs").join("PrismLauncher-0.log")).filter(|p| p.is_file()),
             started: SystemTime::now(),
         })
     }
@@ -124,17 +141,14 @@ fn newest(dir: &Path, since: SystemTime) -> Option<PathBuf> {
         .map(|(_, path)| path)
 }
 
-impl Drop for Session {
-    fn drop(&mut self) {
-        RUNNING.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
 /// Launches an instance, optionally joining a server (`host:port`) once the game is up, with
 /// the account picked in BeaconSync (else Prism's default). The first launch without an
 /// installed Prism downloads the built-in one (reported to `on`).
 pub async fn launch(instance: &Path, s: &Settings, server: Option<&str>, on: OnProgress<'_>) -> Result<Session> {
     let id = instance.file_name().context("bad instance path")?;
+    // Counted before checking for a sign-in, which checks the other way round, so one of the two
+    // always sees the other.
+    let running = Running::new();
     ensure!(!SIGNING_IN.load(Ordering::SeqCst), "Finish adding the Minecraft account first");
     let instances = if uses_builtin(s) { Some(s.instances_root()) } else { prism_instances_dir() };
     let same = |a: &Path, b: &Path| a == b || fs::canonicalize(a).ok().is_some_and(|a| fs::canonicalize(b).is_ok_and(|b| a == b));
@@ -155,7 +169,7 @@ pub async fn launch(instance: &Path, s: &Settings, server: Option<&str>, on: OnP
     {
         cmd.arg("--profile").arg(name);
     }
-    Session::start(cmd, instance, data)
+    Session::start(cmd, running, instance, data)
 }
 
 /// Opens the installed Prism's window, where players manage its accounts.

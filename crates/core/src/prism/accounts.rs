@@ -65,8 +65,9 @@ fn parse(json: &[u8]) -> Vec<Account> {
 /// window first. Play waits for this to finish (see [`super::signing_in`]).
 pub async fn sign_in(s: &Settings, on: OnProgress<'_>) -> Result<Option<Account>> {
     ensure!(uses_builtin(s), "Accounts of an installed Prism Launcher are managed in Prism");
-    ensure!(!busy(), "Close Minecraft before adding an account");
+    // Flag first, then check: Play counts itself first, then checks the flag.
     let mut guard = SignIn::start()?;
+    ensure!(!busy(), "Close Minecraft before adding an account");
     let exe = builtin::ensure(on).await?;
     let temp = guard.temp.clone();
     guard.child = Some(builtin::command(&exe, &temp, &temp.join("instances"))?.spawn().context("starting Prism Launcher")?);
@@ -81,11 +82,20 @@ pub async fn sign_in(s: &Settings, on: OnProgress<'_>) -> Result<Option<Account>
             return Ok(None);
         }
     };
-    drop(guard); // closes the sign-in Prism before its account moves over
+    guard.close();
+    // Still flagged as signing in, so no Play starts a Prism before the account lands.
     let path = builtin::data().join("accounts.json");
-    let existing = fs::read(&path).ok();
-    write_private(&path, &merge(existing.as_deref(), &raw)?)?;
+    write_private(&path, &merge(read_if_exists(&path)?.as_deref(), &raw)?)?;
     Ok(parse(&raw).into_iter().next())
+}
+
+/// The file's bytes, None when it doesn't exist; other read errors stop the caller.
+fn read_if_exists(path: &std::path::Path) -> Result<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).context("reading Prism's accounts.json"),
+    }
 }
 
 /// One sign-in at a time. Dropping it closes the throwaway Prism and deletes its folder (and
@@ -107,12 +117,19 @@ impl SignIn {
     }
 }
 
-impl Drop for SignIn {
-    fn drop(&mut self) {
+impl SignIn {
+    /// Closes the sign-in Prism (it already saved the account).
+    fn close(&mut self) {
         if let Some(mut child) = self.child.take() {
             child.kill().ok();
             child.wait().ok();
         }
+    }
+}
+
+impl Drop for SignIn {
+    fn drop(&mut self) {
+        self.close();
         fs::remove_dir_all(&self.temp).ok();
         super::SIGNING_IN.store(false, Ordering::SeqCst);
     }
@@ -122,6 +139,7 @@ impl Drop for SignIn {
 pub fn remove(s: &Settings, name: &str) -> Result<()> {
     ensure!(uses_builtin(s), "Accounts of an installed Prism Launcher are managed in Prism");
     ensure!(!busy(), "Close Minecraft before removing an account");
+    ensure!(!super::SIGNING_IN.load(Ordering::SeqCst), "Wait for the account being added");
     let path = builtin::data().join("accounts.json");
     let mut root: Value = serde_json::from_slice(&fs::read(&path)?)?;
     let accounts = root["accounts"].as_array_mut().context("accounts.json has no account list")?;
