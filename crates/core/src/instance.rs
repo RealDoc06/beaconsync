@@ -1,6 +1,6 @@
 //! Prism Launcher compatible instances: `instance.cfg`, `mmc-pack.json`, `minecraft/`.
 //! BeaconSync stores instances inside Prism's instance folder when Prism is installed, so
-//! the same folder is playable from Prism and versioned by BeaconSync.
+//! the same folder is playable from Prism and versioned by BeaconSync. Launching is in [`crate::prism`].
 
 use crate::model::{Loader, LoaderKind};
 use anyhow::{Context, Result, bail};
@@ -9,7 +9,6 @@ use serde_json::json;
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 /// Directory where BeaconSync stores its own data (instances when Prism is missing, Java...).
@@ -51,6 +50,44 @@ fn ini_get(text: &str, key: &str) -> Option<String> {
         let (k, v) = l.split_once('=')?;
         (k.trim() == key).then(|| v.trim().to_string())
     })
+}
+
+/// `text` (a Prism `.cfg`) with `key` set to `value`. An existing line is replaced in place;
+/// a new one goes under `[General]` (Qt INI, what Prism writes) or at the end (the flat format
+/// Prism reads too).
+pub fn ini_set(text: &str, key: &str, value: &str) -> String {
+    let line = format!("{key}={value}");
+    let mut lines: Vec<&str> = text.lines().collect();
+    match lines.iter().position(|l| l.split_once('=').is_some_and(|(k, _)| k.trim() == key)) {
+        Some(i) => lines[i] = &line,
+        None => match lines.iter().position(|l| l.trim() == "[General]") {
+            Some(i) => lines.insert(i + 1, &line),
+            None => lines.push(&line),
+        },
+    }
+    lines.join("\n") + "\n"
+}
+
+/// Memory (MB) the instance's game gets, when set for this instance instead of Prism's default.
+pub fn memory(instance: &Path) -> Option<u32> {
+    let cfg = fs::read_to_string(instance.join("instance.cfg")).ok()?;
+    if ini_get(&cfg, "OverrideMemory")? != "true" {
+        return None;
+    }
+    ini_get(&cfg, "MaxMemAlloc")?.parse().ok()
+}
+
+/// Sets the instance's memory (MB), or back to Prism's default with None. Prism reads it on
+/// the next launch.
+pub fn set_memory(instance: &Path, mb: Option<u32>) -> Result<()> {
+    let path = instance.join("instance.cfg");
+    let cfg = fs::read_to_string(&path)?;
+    let cfg = ini_set(&cfg, "OverrideMemory", if mb.is_some() { "true" } else { "false" });
+    let cfg = match mb {
+        Some(mb) => ini_set(&ini_set(&cfg, "MaxMemAlloc", &mb.to_string()), "MinMemAlloc", &(mb / 4).max(512).to_string()),
+        None => cfg,
+    };
+    Ok(fs::write(path, cfg)?)
 }
 
 /// Game directory inside an instance (`minecraft/`, or legacy `.minecraft/`).
@@ -218,59 +255,6 @@ pub fn list(roots: &[PathBuf]) -> Vec<InstanceInfo> {
     out
 }
 
-/// Finds a Prism executable on this machine.
-pub fn prism_command(override_path: Option<&Path>) -> Option<Command> {
-    if let Some(p) = override_path {
-        return Some(Command::new(p));
-    }
-    let mut candidates: Vec<PathBuf> = vec![];
-    if cfg!(target_os = "macos") {
-        candidates.push("/Applications/Prism Launcher.app/Contents/MacOS/prismlauncher".into());
-        if let Some(h) = dirs::home_dir() {
-            candidates.push(h.join("Applications/Prism Launcher.app/Contents/MacOS/prismlauncher"));
-        }
-    } else if cfg!(windows)
-        && let Some(d) = dirs::data_local_dir()
-    {
-        candidates.push(d.join("Programs/PrismLauncher/prismlauncher.exe"));
-    }
-    if let Some(found) = candidates.into_iter().find(|p| p.is_file()) {
-        return Some(Command::new(found));
-    }
-    let in_path = std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|d| d.join(if cfg!(windows) { "prismlauncher.exe" } else { "prismlauncher" }))
-        .find(|p| p.is_file());
-    if let Some(p) = in_path {
-        return Some(Command::new(p));
-    }
-    let flatpak = dirs::home_dir()?.join(".var/app/org.prismlauncher.PrismLauncher");
-    flatpak.is_dir().then(|| {
-        let mut c = Command::new("flatpak");
-        c.args(["run", "org.prismlauncher.PrismLauncher"]);
-        c
-    })
-}
-
-/// Launches an instance through Prism (Prism handles accounts, Java and game files),
-/// optionally joining a server (`host:port`) once the game is up.
-pub fn launch(instance: &Path, prism_override: Option<&Path>, server: Option<&str>) -> Result<()> {
-    let id = instance.file_name().context("bad instance path")?;
-    let in_prism = prism_instances_dir().is_some_and(|d| instance.parent() == Some(d.as_path()));
-    let mut cmd = prism_command(prism_override).context("Prism Launcher was not found. Install it from prismlauncher.org")?;
-    if !in_prism {
-        bail!("This instance is outside Prism's instance folder. Move it there or set the instance folder in Settings.");
-    }
-    cmd.arg("--launch").arg(id);
-    if let Some(s) = server {
-        cmd.arg("--server").arg(s);
-    }
-    cmd.spawn().context("starting Prism Launcher")?;
-    Ok(())
-}
-
 /// Prism's built-in icons, pinned to a commit so paths never move. Fetched on first use and
 /// cached instead of bundled: Prism's art is GPL / CC BY-SA, BeaconSync is MIT.
 const PRISM_ICONS: &str = "https://raw.githubusercontent.com/PrismLauncher/PrismLauncher/059e858e101edc9314ccb94aa48bd01b282539c5/launcher/resources/multimc";
@@ -338,4 +322,31 @@ pub async fn icon(instance: &Path) -> Option<(Vec<u8>, &'static str)> {
     fs::create_dir_all(&cache).ok()?;
     fs::write(missing, b"").ok()?;
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ini_set_replaces_in_place_or_adds_under_general() {
+        let qt = "[General]\nConfigVersion=1.3\nMaxMemAlloc=4096\n[UI]\nx=1\n";
+        assert_eq!(ini_set(qt, "MaxMemAlloc", "8192"), "[General]\nConfigVersion=1.3\nMaxMemAlloc=8192\n[UI]\nx=1\n");
+        assert_eq!(
+            ini_set(qt, "OverrideMemory", "true"),
+            "[General]\nOverrideMemory=true\nConfigVersion=1.3\nMaxMemAlloc=4096\n[UI]\nx=1\n"
+        );
+        assert_eq!(ini_set("name=Pack\n", "MaxMemAlloc", "2048"), "name=Pack\nMaxMemAlloc=2048\n");
+    }
+
+    #[test]
+    fn memory_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("instance.cfg"), "name=Pack\n").unwrap();
+        assert_eq!(memory(dir.path()), None);
+        set_memory(dir.path(), Some(6144)).unwrap();
+        assert_eq!(memory(dir.path()), Some(6144));
+        set_memory(dir.path(), None).unwrap();
+        assert_eq!(memory(dir.path()), None);
+    }
 }

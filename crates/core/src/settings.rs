@@ -17,6 +17,8 @@ pub struct Settings {
     /// Where new instances go. Defaults to Prism's instance folder.
     pub instances_dir: Option<PathBuf>,
     pub prism_path: Option<PathBuf>,
+    /// Prism account (profile name) the game starts with. None uses Prism's default.
+    pub minecraft_account: Option<String>,
 }
 
 impl Settings {

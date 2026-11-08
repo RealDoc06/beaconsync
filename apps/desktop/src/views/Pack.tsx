@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { PageHeader } from '../components/PageHeader'
-import { Button, Dialog, ErrorLine, Input, Tabs } from '../components/ui'
+import { Button, Dialog, ErrorLine, Input, Select, Tabs } from '../components/ui'
 import { call } from '../lib/api'
 import { loaderText } from '../lib/format'
 import { askConfirm, keys, packKeys, useAction, useApp, type PackTab } from '../lib/store'
@@ -66,7 +66,7 @@ export function PackView({ path, tab }: { path: string; tab: PackTab }) {
 function Header({ p }: { p: PackInfo }) {
   const go = useApp((s) => s.go)
   const [renaming, setRenaming] = useState(false)
-  const play = useAction(() => call('launch', { path: p.path }), { label: 'Starting Prism Launcher', done: 'Prism Launcher started' })
+  const play = useAction(() => call('launch', { path: p.path }), { label: 'Starting Minecraft', done: 'Minecraft is starting' })
   const reveal = useAction(() => call('open_external', { target: p.path }), { label: 'Opening folder' })
   const remove = useAction(() => call('delete_pack', { path: p.path }), {
     label: 'Deleting pack',
@@ -105,11 +105,36 @@ function Header({ p }: { p: PackInfo }) {
         Delete
       </Button>
       <Button onClick={() => reveal.mutate(undefined)}>Open folder</Button>
+      <Memory path={p.path} />
       <Button variant="primary" onClick={() => play.mutate(undefined)} disabled={play.isPending}>
         Play
       </Button>
       {renaming && <RenameDialog p={p} onClose={() => setRenaming(false)} />}
     </PageHeader>
+  )
+}
+
+const MEMORY_GB = [2, 3, 4, 6, 8, 12, 16]
+
+/** Memory the game gets, saved in the instance for Prism. Empty means Prism's default. */
+function Memory({ path }: { path: string }) {
+  const memory = useQuery({ queryKey: keys.memory(path), queryFn: () => call('instance_memory', { path }) })
+  const save = useAction((mb: number | null) => call('set_instance_memory', { path, mb }), {
+    label: 'Saving memory',
+    invalidate: [keys.memory(path)],
+  })
+  if (memory.isPending) return null
+  return (
+    <Select
+      value={memory.data ? String(memory.data) : ''}
+      onChange={(v) => save.mutate(v ? Number(v) : null)}
+      options={[
+        { value: '', label: 'Memory: default' },
+        ...MEMORY_GB.map((gb) => ({ value: String(gb * 1024), label: `Memory: ${gb} GB` })),
+        // Keep a value set elsewhere (in Prism) selectable.
+        ...(memory.data && !MEMORY_GB.includes(memory.data / 1024) ? [{ value: String(memory.data), label: `Memory: ${memory.data} MB` }] : []),
+      ]}
+    />
   )
 }
 

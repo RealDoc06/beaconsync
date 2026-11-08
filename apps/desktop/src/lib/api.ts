@@ -54,6 +54,8 @@ export interface Commands {
   check_release: Cmd<P, T.UpdateInfo>
   update_subscribed: Cmd<P, T.UpdateInfo>
   launch: Cmd<P, null>
+  instance_memory: Cmd<P, number | null>
+  set_instance_memory: Cmd<P<{ mb: number | null }>, null>
   rename_pack: Cmd<P<{ name: string }>, null>
   delete_pack: Cmd<P, null>
   open_external: Cmd<{ target: string }, null>
@@ -61,6 +63,11 @@ export interface Commands {
   // hub
   get_settings: Cmd<None, T.SettingsView>
   save_settings: Cmd<{ form: T.SettingsForm }, null>
+  minecraft_accounts: Cmd<None, T.MinecraftAccounts>
+  set_minecraft_account: Cmd<{ name: string }, null>
+  open_prism: Cmd<None, null>
+  add_minecraft_account: Cmd<None, T.MinecraftAccount | null>
+  remove_minecraft_account: Cmd<{ name: string }, null>
   sign_in: Cmd<{ username: string; password: string; create: boolean }, string>
   sign_out: Cmd<None, null>
   approve_device: Cmd<{ code: string }, null>

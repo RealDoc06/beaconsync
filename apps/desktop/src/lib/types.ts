@@ -292,7 +292,24 @@ export interface SettingsView {
   instances_dir: string
   instances_custom: boolean
   prism_path: string | null
-  prism_found: boolean
+  /** Which Prism plays the game: the player's own, BeaconSync's (downloaded on first play), or none. */
+  prism: 'installed' | 'built_in' | 'missing'
+}
+
+/** A Minecraft account signed in to Prism (names only, Prism keeps the tokens). */
+export interface MinecraftAccount {
+  name: string
+  offline: boolean
+  /** Prism's default account. */
+  default: boolean
+}
+
+export interface MinecraftAccounts {
+  accounts: MinecraftAccount[]
+  /** Account the game starts with: picked in BeaconSync, else Prism's default. */
+  selected: string | null
+  /** Which Prism holds them. Built-in accounts are added and removed from BeaconSync. */
+  prism: SettingsView['prism']
 }
 
 /** Empty strings reset a field to its default. */
