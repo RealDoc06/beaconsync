@@ -5,6 +5,7 @@ use crate::{
     fetch::{OnProgress, Progress},
     instance::{data_dir, ini_set},
     release::{self, Asset},
+    store::write_atomic,
 };
 use anyhow::{Context, Result};
 use std::{
@@ -95,6 +96,9 @@ pub fn data() -> PathBuf {
 
 /// The built-in Prism's executable, downloaded first if needed.
 pub async fn ensure(on: OnProgress<'_>) -> Result<PathBuf> {
+    // Two clicks on Play must not download into the same files.
+    static DOWNLOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _one_at_a_time = DOWNLOAD.lock().await;
     let build = build().context("There is no Prism Launcher build for this computer. Install it from prismlauncher.org")?;
     let app = root().join(VERSION);
     if !app.join(build.exe).is_file() {
@@ -111,7 +115,11 @@ pub fn command(exe: &Path, data: &Path, instances: &Path) -> Result<Command> {
     let text = fs::read_to_string(&cfg).unwrap_or_else(|_| FIRST_RUN.into());
     // Forward slashes and quotes keep Qt from reading backslashes as escapes or commas as lists.
     let dir = format!("\"{}\"", instances.display().to_string().replace('\\', "/"));
-    fs::write(&cfg, ini_set(&text, "InstanceDir", &dir))?;
+    // Kept on every run, not just the first: BeaconSync reports crashes instead of Prism.
+    let updated = ini_set(&ini_set(&text, "InstanceDir", &dir), "ShowConsoleOnError", "false");
+    if updated != text {
+        write_atomic(&cfg, updated.as_bytes())?;
+    }
     let mut cmd = Command::new(exe);
     // The Linux start script turns on portable mode when `portable.txt` is in the working dir.
     cmd.arg("--dir").arg(data).current_dir(data);
@@ -145,10 +153,12 @@ async fn download(build: &Build, app: &Path, on: OnProgress<'_>) -> Result<()> {
     tokio::task::spawn_blocking(move || unpack(&from, &to, ext)).await??;
     fs::remove_file(&archive).ok();
     for old in fs::read_dir(root())?.flatten() {
-        if old.file_name() != "data" && old.path() != staging {
+        if old.file_name() != "data" && old.file_name() != "sign-in" && old.path() != staging {
             fs::remove_dir_all(old.path()).ok();
         }
     }
+    // A half unpacked folder from an older attempt would block the rename on Windows.
+    fs::remove_dir_all(app).ok();
     fs::rename(&staging, app)?;
     Ok(())
 }
@@ -167,8 +177,7 @@ fn unpack(archive: &Path, dest: &Path, ext: &str) -> Result<()> {
 }
 
 /// Settings for a fresh built-in Prism. They answer its setup questions (language, theme, Java),
-/// so its first run only asks the player to sign in with Microsoft, and keep its console closed
-/// when the game crashes (BeaconSync reports crashes itself).
+/// so its first run only asks the player to sign in with Microsoft.
 const FIRST_RUN: &str = "[General]
 ConfigVersion=1.3
 Language=en_US
@@ -176,5 +185,4 @@ ApplicationTheme=system
 IconTheme=pe_colored
 AutomaticJavaDownload=true
 AutomaticJavaSwitch=true
-ShowConsoleOnError=false
 ";

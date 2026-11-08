@@ -73,11 +73,31 @@ impl ObjectStore {
 /// Writes through a temp file in the same directory, then renames, so readers never see
 /// half written files.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_through_temp(path, bytes, false)
+}
+
+/// [`write_atomic`] for files holding secrets: owner-only permissions from the start.
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_through_temp(path, bytes, true)
+}
+
+fn write_through_temp(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
     let dir = path.parent().context("path has no parent")?;
     fs::create_dir_all(dir)?;
     let tmp = dir.join(format!(".{}.tmp{}", path.file_name().and_then(|n| n.to_str()).unwrap_or("obj"), std::process::id()));
     {
-        let mut f = fs::File::create(&tmp)?;
+        // The mode only applies to new files, so a leftover temp file must go first.
+        fs::remove_file(&tmp).ok();
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        let mut f = options.open(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all().ok();
     }

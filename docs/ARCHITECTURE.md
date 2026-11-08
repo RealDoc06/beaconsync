@@ -32,11 +32,13 @@ Players never see the built-in Prism's window:
 - `--launch` starts the game without it; Prism quits when the game does.
 - Adding an account runs a throwaway Prism on an empty data folder, which opens straight on the
   Microsoft sign-in. Once it saves the account, BeaconSync closes it and copies the entry into
-  the real `accounts.json`. Removing edits that file. Both wait until no Prism started by the
-  app is running, since Prism rewrites its files.
+  the real `accounts.json` (owner-only, like Prism writes it). Removing edits that file. Both
+  wait until no Prism started by the app is running, since Prism rewrites its files, and Play
+  waits for a sign-in to finish.
 - Play passes the account picked in BeaconSync with `--profile`.
-- Its console stays closed on crashes (`ShowConsoleOnError=false`); BeaconSync waits for Prism
-  to exit and reports a crash report the game wrote meanwhile.
+- Its console stays closed when things go wrong (`ShowConsoleOnError=false`); BeaconSync waits
+  for Prism to exit and reports a crash report the game wrote meanwhile, or, when Prism exits
+  with an error, the game's or Prism's log.
 - Memory is set per instance in `instance.cfg` (`OverrideMemory`, `MaxMemAlloc`).
 
 ## Repo layout (`<instance>/.beacon/`)

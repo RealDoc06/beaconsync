@@ -3,11 +3,11 @@
 //! Only profile names leave the file; tokens are copied between Prism files as they are.
 
 use super::{builtin, busy, uses_builtin};
-use crate::{fetch::OnProgress, instance::prism_data_dir, settings::Settings, store::write_atomic};
+use crate::{fetch::OnProgress, instance::prism_data_dir, settings::Settings, store::write_private};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf, time::Duration};
+use std::{fs, path::PathBuf, process::Child, sync::atomic::Ordering, time::Duration};
 
 /// A Minecraft account signed in to Prism.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -62,36 +62,60 @@ fn parse(json: &[u8]) -> Vec<Account> {
 /// Signs a Microsoft account in to the built-in Prism, showing only Prism's sign-in page: a
 /// throwaway Prism without accounts opens straight on it, and once that Prism has saved the
 /// account BeaconSync closes it and moves the account over. None when the player closed the
-/// window first.
+/// window first. Play waits for this to finish (see [`super::signing_in`]).
 pub async fn sign_in(s: &Settings, on: OnProgress<'_>) -> Result<Option<Account>> {
     ensure!(uses_builtin(s), "Accounts of an installed Prism Launcher are managed in Prism");
     ensure!(!busy(), "Close Minecraft before adding an account");
+    let mut guard = SignIn::start()?;
     let exe = builtin::ensure(on).await?;
-    let temp = builtin::root().join("sign-in");
-    fs::remove_dir_all(&temp).ok();
-    let mut child = builtin::command(&exe, &temp, &temp.join("instances"))?.spawn().context("starting Prism Launcher")?;
-    let signed_in = loop {
+    let temp = guard.temp.clone();
+    guard.child = Some(builtin::command(&exe, &temp, &temp.join("instances"))?.spawn().context("starting Prism Launcher")?);
+    let raw = loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        let exited = child.try_wait()?.is_some();
         // Prism saves the account with QSaveFile, so a read never sees half a file.
         let raw = fs::read(temp.join("accounts.json")).unwrap_or_default();
         if !parse(&raw).is_empty() {
-            child.kill().ok();
-            child.wait().ok();
-            break Some(raw);
+            break raw;
         }
-        if exited {
-            break None;
+        if guard.child.as_mut().and_then(|c| c.try_wait().ok()).flatten().is_some() {
+            return Ok(None);
         }
     };
-    let added = signed_in.map(|raw| -> Result<Account> {
-        let path = builtin::data().join("accounts.json");
-        let merged = merge(fs::read(&path).ok().as_deref(), &raw)?;
-        write_atomic(&path, &merged)?;
-        parse(&raw).into_iter().next().context("no account")
-    });
-    fs::remove_dir_all(&temp).ok();
-    added.transpose()
+    drop(guard); // closes the sign-in Prism before its account moves over
+    let path = builtin::data().join("accounts.json");
+    let existing = fs::read(&path).ok();
+    write_private(&path, &merge(existing.as_deref(), &raw)?)?;
+    Ok(parse(&raw).into_iter().next())
+}
+
+/// One sign-in at a time. Dropping it closes the throwaway Prism and deletes its folder (and
+/// the tokens in it) on every exit path.
+struct SignIn {
+    child: Option<Child>,
+    temp: PathBuf,
+}
+
+impl SignIn {
+    fn start() -> Result<Self> {
+        ensure!(!super::SIGNING_IN.swap(true, Ordering::SeqCst), "An account is already being added");
+        let temp = builtin::root().join("sign-in");
+        let guard = Self { child: None, temp };
+        if guard.temp.exists() {
+            fs::remove_dir_all(&guard.temp).context("removing an old sign-in folder")?;
+        }
+        Ok(guard)
+    }
+}
+
+impl Drop for SignIn {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            child.kill().ok();
+            child.wait().ok();
+        }
+        fs::remove_dir_all(&self.temp).ok();
+        super::SIGNING_IN.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Removes an account from the built-in Prism.
@@ -103,13 +127,16 @@ pub fn remove(s: &Settings, name: &str) -> Result<()> {
     let accounts = root["accounts"].as_array_mut().context("accounts.json has no account list")?;
     accounts.retain(|a| a["profile"]["name"] != name);
     ensure_default(accounts);
-    write_atomic(&path, &serde_json::to_vec_pretty(&root)?)
+    write_private(&path, &serde_json::to_vec_pretty(&root)?)
 }
 
 /// `existing` accounts.json plus every account in `added`, replacing ones with the same profile.
+/// An unreadable existing file is an error rather than replaced, so no account is lost.
 fn merge(existing: Option<&[u8]>, added: &[u8]) -> Result<Vec<u8>> {
-    let mut root: Value =
-        existing.and_then(|b| serde_json::from_slice(b).ok()).unwrap_or_else(|| json!({ "formatVersion": 3, "accounts": [] }));
+    let mut root: Value = match existing {
+        Some(bytes) => serde_json::from_slice(bytes).context("Prism's accounts.json is unreadable")?,
+        None => json!({ "formatVersion": 3, "accounts": [] }),
+    };
     let added: Value = serde_json::from_slice(added)?;
     let accounts = root["accounts"].as_array_mut().context("accounts.json has no account list")?;
     for mut a in added["accounts"].as_array().cloned().unwrap_or_default() {
@@ -173,5 +200,11 @@ mod tests {
         let merged: Value = serde_json::from_slice(&merge(None, &serde_json::to_vec(&added).unwrap()).unwrap()).unwrap();
         assert_eq!(merged["formatVersion"], 3);
         assert_eq!(merged["accounts"][0]["active"], true);
+    }
+
+    #[test]
+    fn merge_refuses_an_unreadable_file() {
+        let added = serde_json::to_vec(&json!({ "accounts": [account("Steve", "1", false)] })).unwrap();
+        assert!(merge(Some(b"{ truncated"), &added).is_err());
     }
 }

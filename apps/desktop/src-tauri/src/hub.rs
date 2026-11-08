@@ -102,9 +102,10 @@ pub async fn set_minecraft_account(name: String) -> Res<()> {
 /// the player closed the sign-in.
 #[tauri::command]
 pub async fn add_minecraft_account(app: AppHandle) -> Res<Option<prism::Account>> {
-    let mut s = Settings::load();
-    let added = prism::accounts::sign_in(&s, &progress(&app)).await?;
+    let added = prism::accounts::sign_in(&Settings::load(), &progress(&app)).await?;
     if let Some(a) = &added {
+        // Reloaded: settings may have changed during the sign-in.
+        let mut s = Settings::load();
         s.minecraft_account = Some(a.name.clone());
         s.save()?;
     }

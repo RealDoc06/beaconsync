@@ -13,16 +13,16 @@ pub use accounts::Account;
 
 use crate::{
     fetch::OnProgress,
-    instance::{game_dir, prism_instances_dir},
+    instance::{game_dir, prism_data_dir, prism_instances_dir},
     settings::Settings,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Child, Command},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::SystemTime,
 };
 
@@ -63,33 +63,65 @@ pub fn busy() -> bool {
     RUNNING.load(Ordering::SeqCst) > 0
 }
 
+/// Set while [`accounts::sign_in`] runs. Play waits for it: a Prism started meanwhile would
+/// load the account list before the new account lands and later save over it.
+static SIGNING_IN: AtomicBool = AtomicBool::new(false);
+
+/// How a game started by [`launch`] went wrong.
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Failure {
+    /// The game crashed and wrote this crash report.
+    Crashed { report: PathBuf },
+    /// Prism could not start the game (Java, downloads, sign-in...); this log says why.
+    Failed { log: Option<PathBuf> },
+}
+
 /// A Prism process started by [`launch`]. Dropping it leaves Prism and the game running.
 pub struct Session {
     child: Child,
     game_dir: PathBuf,
+    /// Prism's own log, for launches that fail before the game writes one.
+    prism_log: Option<PathBuf>,
     started: SystemTime,
 }
 
 impl Session {
-    fn start(mut cmd: Command, instance: &Path) -> Result<Self> {
+    fn start(mut cmd: Command, instance: &Path, prism_data: Option<PathBuf>) -> Result<Self> {
         let child = cmd.spawn().context("starting Prism Launcher")?;
         RUNNING.fetch_add(1, Ordering::SeqCst);
-        Ok(Self { child, game_dir: game_dir(instance), started: SystemTime::now() })
+        Ok(Self {
+            child,
+            game_dir: game_dir(instance),
+            prism_log: prism_data.map(|d| d.join("logs").join("PrismLauncher-0.log")),
+            started: SystemTime::now(),
+        })
     }
 
-    /// Blocks until Prism exits (it quits with the game) and returns the crash report the game
-    /// wrote meanwhile, if it crashed. When Prism was already open it only forwards the launch
-    /// and exits at once, so no crash is seen then.
-    pub fn wait(mut self) -> Option<PathBuf> {
-        self.child.wait().ok();
-        fs::read_dir(self.game_dir.join("crash-reports"))
-            .ok()?
-            .flatten()
-            .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
-            .filter(|(modified, _)| *modified >= self.started)
-            .max()
-            .map(|(_, path)| path)
+    /// Blocks until Prism exits (it quits with the game) and says what went wrong, if anything.
+    /// When Prism was already open it only forwards the launch and exits at once, so nothing
+    /// is seen then.
+    pub fn wait(mut self) -> Option<Failure> {
+        let ok = self.child.wait().is_ok_and(|s| s.success());
+        if let Some(report) = newest(&self.game_dir.join("crash-reports"), self.started) {
+            return Some(Failure::Crashed { report });
+        }
+        // Prism exits with 1 when the launch fails and its console stays closed.
+        let game_log = self.game_dir.join("logs").join("latest.log");
+        let fresh = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).is_ok_and(|m| m >= self.started);
+        (!ok).then(|| Failure::Failed { log: Some(game_log).filter(|p| fresh(p)).or(self.prism_log.take()) })
     }
+}
+
+/// The newest file in `dir` modified at or after `since`.
+fn newest(dir: &Path, since: SystemTime) -> Option<PathBuf> {
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .filter(|(modified, _)| *modified >= since)
+        .max()
+        .map(|(_, path)| path)
 }
 
 impl Drop for Session {
@@ -103,13 +135,15 @@ impl Drop for Session {
 /// installed Prism downloads the built-in one (reported to `on`).
 pub async fn launch(instance: &Path, s: &Settings, server: Option<&str>, on: OnProgress<'_>) -> Result<Session> {
     let id = instance.file_name().context("bad instance path")?;
+    ensure!(!SIGNING_IN.load(Ordering::SeqCst), "Finish adding the Minecraft account first");
     let instances = if uses_builtin(s) { Some(s.instances_root()) } else { prism_instances_dir() };
-    if instances.as_deref() != instance.parent() {
+    let same = |a: &Path, b: &Path| a == b || fs::canonicalize(a).ok().is_some_and(|a| fs::canonicalize(b).is_ok_and(|b| a == b));
+    if !instances.as_deref().zip(instance.parent()).is_some_and(|(a, b)| same(a, b)) {
         bail!("This instance is outside Prism's instance folder. Move it there or set the instance folder in Settings.");
     }
-    let mut cmd = match installed(s.prism_path.as_deref()) {
-        Some(cmd) => cmd,
-        None => builtin::command(&builtin::ensure(on).await?, &builtin::data(), &s.instances_root())?,
+    let (mut cmd, data) = match installed(s.prism_path.as_deref()) {
+        Some(cmd) => (cmd, prism_data_dir()),
+        None => (builtin::command(&builtin::ensure(on).await?, &builtin::data(), &s.instances_root())?, Some(builtin::data())),
     };
     cmd.arg("--launch").arg(id);
     if let Some(s) = server {
@@ -121,7 +155,7 @@ pub async fn launch(instance: &Path, s: &Settings, server: Option<&str>, on: OnP
     {
         cmd.arg("--profile").arg(name);
     }
-    Session::start(cmd, instance)
+    Session::start(cmd, instance, data)
 }
 
 /// Opens the installed Prism's window, where players manage its accounts.
@@ -132,7 +166,7 @@ pub fn open_installed(s: &Settings) -> Result<()> {
 
 /// Finds an installed Prism executable on this machine.
 fn installed(override_path: Option<&Path>) -> Option<Command> {
-    if let Some(p) = override_path {
+    if let Some(p) = override_path.filter(|p| p.is_file()) {
         return Some(Command::new(p));
     }
     let mut candidates: Vec<PathBuf> = vec![];

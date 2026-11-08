@@ -312,6 +312,9 @@ export interface MinecraftAccounts {
   prism: SettingsView['prism']
 }
 
+/** How a game started from BeaconSync went wrong (`game-failed` event). */
+export type GameFailure = { kind: 'crashed'; report: string } | { kind: 'failed'; log: string | null }
+
 /** Empty strings reset a field to its default. */
 export interface SettingsForm {
   hub: string

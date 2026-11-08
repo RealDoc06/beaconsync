@@ -27,8 +27,8 @@ interface AppState {
   /** Label of the long operation in progress (one at a time keeps the UI calm). */
   busy: string | null
   progress: Progress | null
-  /** `open` is a file the notice offers to open (a crash report). */
-  notice: { kind: 'error' | 'ok'; text: string; open?: string } | null
+  /** `open` is a file the notice offers to open (a crash report or log). */
+  notice: { kind: 'error' | 'ok'; text: string; open?: { path: string; label: string } } | null
   confirm: Confirm | null
   /** Merge conflicts waiting for the user to pick a side. */
   conflicts: { path: string; items: Conflict[] } | null

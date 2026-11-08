@@ -343,10 +343,10 @@ pub async fn launch(app: AppHandle, path: String) -> Res<()> {
         Err(_) => None,
     };
     let session = prism::launch(Path::new(&path), &Settings::load(), server.as_deref(), &progress(&app)).await?;
-    // Prism keeps its console closed on crashes, so the app tells the player instead.
+    // The built-in Prism keeps its console closed when things go wrong, so the app tells the player.
     std::thread::spawn(move || {
-        if let Some(report) = session.wait() {
-            app.emit("game-crashed", report).ok();
+        if let Some(failure) = session.wait() {
+            app.emit("game-failed", failure).ok();
         }
     });
     Ok(())
@@ -360,6 +360,9 @@ pub async fn instance_memory(path: String) -> Res<Option<u32>> {
 
 #[tauri::command]
 pub async fn set_instance_memory(path: String, mb: Option<u32>) -> Res<()> {
+    if prism::busy() {
+        return Err(anyhow!("Close Minecraft before changing its memory").into());
+    }
     Ok(instance::set_memory(Path::new(&path), mb)?)
 }
 

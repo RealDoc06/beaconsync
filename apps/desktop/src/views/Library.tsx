@@ -97,7 +97,7 @@ function Row({ item }: { item: LibraryItem }) {
             Track
           </Button>
         )}
-        <Button small onClick={() => play.mutate(undefined)}>
+        <Button small onClick={() => play.mutate(undefined)} disabled={play.isPending}>
           Play
         </Button>
       </div>

@@ -77,17 +77,20 @@ pub fn memory(instance: &Path) -> Option<u32> {
     ini_get(&cfg, "MaxMemAlloc")?.parse().ok()
 }
 
-/// Sets the instance's memory (MB), or back to Prism's default with None. Prism reads it on
-/// the next launch.
+/// Sets the instance's memory (MB, at least 512), or back to Prism's default with None. Prism
+/// reads it on the next launch; while the instance runs, Prism would save over it.
 pub fn set_memory(instance: &Path, mb: Option<u32>) -> Result<()> {
+    anyhow::ensure!(mb.is_none_or(|mb| mb >= 512), "Minecraft needs at least 512 MB");
     let path = instance.join("instance.cfg");
     let cfg = fs::read_to_string(&path)?;
     let cfg = ini_set(&cfg, "OverrideMemory", if mb.is_some() { "true" } else { "false" });
     let cfg = match mb {
-        Some(mb) => ini_set(&ini_set(&cfg, "MaxMemAlloc", &mb.to_string()), "MinMemAlloc", &(mb / 4).max(512).to_string()),
+        Some(mb) => {
+            ini_set(&ini_set(&cfg, "MaxMemAlloc", &mb.to_string()), "MinMemAlloc", &(mb / 4).max(512).min(mb).to_string())
+        }
         None => cfg,
     };
-    Ok(fs::write(path, cfg)?)
+    crate::store::write_atomic(&path, cfg.as_bytes())
 }
 
 /// Game directory inside an instance (`minecraft/`, or legacy `.minecraft/`).
@@ -348,5 +351,6 @@ mod tests {
         assert_eq!(memory(dir.path()), Some(6144));
         set_memory(dir.path(), None).unwrap();
         assert_eq!(memory(dir.path()), None);
+        assert!(set_memory(dir.path(), Some(256)).is_err());
     }
 }

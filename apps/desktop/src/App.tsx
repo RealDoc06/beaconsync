@@ -7,7 +7,7 @@ import { Button, Dialog, ProgressBar, Select } from './components/ui'
 import { UpdateButton } from './components/UpdateButton'
 import { call } from './lib/api'
 import { askConfirm, keys, useAction, useApp, type View } from './lib/store'
-import type { Progress, UpdateView } from './lib/types'
+import type { GameFailure, Progress, UpdateView } from './lib/types'
 import { ImportView } from './views/Import'
 import { JoinView } from './views/Join'
 import { LibraryView } from './views/Library'
@@ -24,7 +24,14 @@ export function App() {
     const offs = [
       listen<Progress>('progress', (e) => set({ progress: e.payload })),
       listen<UpdateView>('update', (e) => qc.setQueryData(keys.update, e.payload)),
-      listen<string>('game-crashed', (e) => set({ notice: { kind: 'error', text: 'Minecraft crashed', open: e.payload } })),
+      listen<GameFailure>('game-failed', ({ payload: f }) =>
+        set({
+          notice:
+            f.kind === 'crashed'
+              ? { kind: 'error', text: 'Minecraft crashed', open: { path: f.report, label: 'Open crash report' } }
+              : { kind: 'error', text: 'Minecraft could not start', open: f.log ? { path: f.log, label: 'Open log' } : undefined },
+        }),
+      ),
     ]
     return () => offs.forEach((off) => void off.then((f) => f()))
   }, [set, qc])
@@ -146,8 +153,8 @@ function StatusBar() {
             {notice.text}
           </span>
           {notice.open && (
-            <button type="button" className="text-muted hover:text-fg" onClick={() => void call('open_external', { target: notice.open! })}>
-              Open crash report
+            <button type="button" className="text-muted hover:text-fg" onClick={() => void call('open_external', { target: notice.open!.path })}>
+              {notice.open.label}
             </button>
           )}
           <button type="button" className="text-muted hover:text-fg" onClick={() => set({ notice: null })}>
