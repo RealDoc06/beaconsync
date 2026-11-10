@@ -6,13 +6,14 @@
 #   NOTARY_KEY_ID=ABC123 scripts/release-macos.sh
 #
 # Notarizes with an App Store Connect API key: ~/.appstoreconnect/private_keys/AuthKey_<id>.p8
-# and its issuer id in ~/.appstoreconnect/issuer_id.
+# and its issuer id in ~/.appstoreconnect/issuer_id. CI passes NOTARY_KEY_PATH and NOTARY_ISSUER
+# instead, plus APPLE_CERTIFICATE (base64 .p12) so Tauri signs from a throwaway keychain.
 # Output: target/universal-apple-darwin/release/bundle/dmg/BeaconSync_<version>_universal.dmg
 set -euo pipefail
 : "${APPLE_SIGNING_IDENTITY:?set APPLE_SIGNING_IDENTITY}"
 : "${NOTARY_KEY_ID:?set NOTARY_KEY_ID}"
-key=~/.appstoreconnect/private_keys/AuthKey_$NOTARY_KEY_ID.p8
-issuer=$(cat ~/.appstoreconnect/issuer_id)
+key=${NOTARY_KEY_PATH:-~/.appstoreconnect/private_keys/AuthKey_$NOTARY_KEY_ID.p8}
+issuer=${NOTARY_ISSUER:-$(cat ~/.appstoreconnect/issuer_id)}
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null

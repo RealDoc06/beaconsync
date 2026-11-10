@@ -86,7 +86,8 @@ How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 BEACON_HUB_PUBLIC_URL=https://hub.example.com docker compose -f docker/docker-compose.hub.yml up -d
 ```
 
-or run the binary: `beacon-hub --data ./hub-data --addr 0.0.0.0:8787`. Put it behind TLS for public use.
+or the published image: `docker run -d -p 8787:8787 -v hub-data:/data -e BEACON_HUB_PUBLIC_URL=https://hub.example.com ghcr.io/realdoc06/beacon-hub`,
+or the binary: `beacon-hub --data ./hub-data --addr 0.0.0.0:8787`. Put it behind TLS for public use.
 
 ### 2. Make a pack in the app
 
@@ -148,10 +149,18 @@ Requirements: Rust (stable), Node 22 + pnpm, JDK 25 for the mod. On Linux also t
 
 ```sh
 cargo build --release -p beacon-cli -p beacon-hub
-cargo test -p beacon-core -p beacon-hub -p beacon-cli
+cargo test --workspace
 cd apps/desktop && pnpm install && pnpm tauri build
 cd mods/companion-fabric && ./gradlew build
 ```
+
+## Releasing
+
+Push a `v*` tag. The Release workflow builds the CLI and hub, the desktop app (macOS universal,
+signed and notarized; Windows and Linux on x64 and arm64), the companion mod and the
+`ghcr.io/realdoc06/beacon-hub` image, then publishes the release. The Apple signing secrets live
+in the repo's `release` environment, which only `v*` tags can use. `scripts/release-macos.sh`
+still builds a signed macOS app by hand on a Mac.
 
 ## Notes
 
