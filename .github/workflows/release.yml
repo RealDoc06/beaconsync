@@ -1,9 +1,9 @@
 name: Release
 
+# Pushing a v* tag builds everything into a draft release, then publishes it once every job passed.
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -65,20 +65,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  # The macOS app is signed and notarized on a Mac with scripts/release-macos.sh.
   desktop:
     needs: release
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: windows-latest, args: "" }
-          - { os: ubuntu-22.04, args: "" }
+        os: [windows-latest, windows-11-arm, ubuntu-22.04, ubuntu-22.04-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Linux deps
-        if: startsWith(matrix.os, 'ubuntu')
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
@@ -100,7 +97,43 @@ jobs:
         with:
           projectPath: apps/desktop
           releaseId: ${{ needs.release.outputs.id }}
-          args: ${{ matrix.args }}
+
+  # Universal app, signed with the Developer ID and notarized. Secrets live in the `release`
+  # environment, which only v* tags can use.
+  desktop-macos:
+    needs: release
+    runs-on: macos-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: apps/desktop/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - name: Build, sign and notarize
+        run: |
+          export NOTARY_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_API_KEY_P8" > "$NOTARY_KEY_PATH"
+          scripts/release-macos.sh
+        env:
+          # Tauri imports the certificate into a throwaway keychain and signs with it.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - run: gh release upload "${GITHUB_REF_NAME}" target/universal-apple-darwin/release/bundle/dmg/*.dmg --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   companion-mod:
     needs: release
@@ -121,5 +154,46 @@ jobs:
             cp "$jar" beaconsync-companion-$mc.jar
             gh release upload "${GITHUB_REF_NAME}" "$jar" beaconsync-companion-$mc.jar --clobber
           done
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # ghcr.io/realdoc06/beacon-hub:<version> and :latest, packing the static musl builds above.
+  hub-image:
+    needs: cli-and-hub
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the hub binaries
+        run: |
+          gh release download "${GITHUB_REF_NAME}" -D hub-bin -p 'beacon-hub-*-unknown-linux-musl'
+          mv hub-bin/beacon-hub-x86_64-unknown-linux-musl hub-bin/beacon-hub-amd64
+          mv hub-bin/beacon-hub-aarch64-unknown-linux-musl hub-bin/beacon-hub-arm64
+          chmod +x hub-bin/*
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/hub.release.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/realdoc06/beacon-hub:${{ github.ref_name }}
+            ghcr.io/realdoc06/beacon-hub:latest
+
+  publish:
+    needs: [cli-and-hub, desktop, desktop-macos, companion-mod, hub-image]
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh release edit "${GITHUB_REF_NAME}" -R "${GITHUB_REPOSITORY}" --draft=false --latest
         env:
           GH_TOKEN: ${{ github.token }}
