@@ -91,4 +91,7 @@ async fn toggling_a_mod_twice_is_a_noop() {
     assert_eq!(repo.set_enabled("mods/thing.jar", false).unwrap(), "mods/thing.jar.disabled");
     assert_eq!(repo.set_enabled("mods/thing.jar", false).unwrap(), "mods/thing.jar.disabled");
     assert_eq!(read(&repo, "mods/thing.jar.disabled").as_deref(), Some("jar bytes"));
+    // Both spellings on disk is a conflict, not a silent success.
+    write(&repo, "mods/thing.jar", "other bytes");
+    assert!(repo.set_enabled("mods/thing.jar", false).is_err());
 }

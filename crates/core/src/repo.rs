@@ -738,8 +738,13 @@ impl Repo {
         let game = self.game_dir();
         let base = crate::model::enabled_path(rel);
         let target = if enabled { base.to_string() } else { format!("{base}.disabled") };
-        if target != rel && !game.join(&target).exists() {
-            fs::rename(game.join(rel), game.join(&target))?;
+        if target == rel {
+            return Ok(target);
+        }
+        match (game.join(rel).exists(), game.join(&target).exists()) {
+            (true, true) => bail!("both {rel} and {target} exist, remove one of them"),
+            (_, true) => {}
+            _ => fs::rename(game.join(rel), game.join(&target))?,
         }
         Ok(target)
     }
