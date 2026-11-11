@@ -139,7 +139,7 @@ const ModRow = memo(function ModRow({
   const filename = file.path.split('/').pop()
   return (
     <div className={`grid h-10 grid-cols-[36px_minmax(0,1fr)_minmax(0,150px)_112px_96px] items-center @max-[700px]:grid-cols-[36px_minmax(0,1fr)_112px_96px] gap-3 border-b border-line px-5 hover:bg-hover ${file.enabled ? '' : 'opacity-50'}`}>
-      <Toggle checked={file.enabled} onChange={(v) => toggle.mutate(v)} disabled={readOnly} label={undefined} />
+      <Toggle checked={file.enabled} onChange={(v) => toggle.mutate(v)} disabled={readOnly || toggle.isPending} label={undefined} />
       <div className="min-w-0 truncate" title={filename}>
         <span>{file.name}</span>
         <span className="ml-2 text-xs text-[#555]">{filename}</span>
