@@ -732,12 +732,19 @@ impl Repo {
     }
 
     /// Toggles a mod on or off by renaming it with the `.disabled` suffix.
+    /// `rel` may be either spelling; a mod already in the requested state is left alone,
+    /// so a repeated toggle from a stale UI row is a no-op instead of an error.
     pub fn set_enabled(&self, rel: &str, enabled: bool) -> Result<String> {
         let game = self.game_dir();
         let base = crate::model::enabled_path(rel);
         let target = if enabled { base.to_string() } else { format!("{base}.disabled") };
-        if target != rel {
-            fs::rename(game.join(rel), game.join(&target))?;
+        if target == rel {
+            return Ok(target);
+        }
+        match (game.join(rel).exists(), game.join(&target).exists()) {
+            (true, true) => bail!("both {rel} and {target} exist, remove one of them"),
+            (_, true) => {}
+            _ => fs::rename(game.join(rel), game.join(&target))?,
         }
         Ok(target)
     }
