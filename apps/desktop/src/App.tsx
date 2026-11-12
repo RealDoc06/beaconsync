@@ -91,7 +91,11 @@ function Sidebar() {
       <div data-tauri-drag-region className="flex h-12 items-center gap-2 px-4">
         <img src={logo} alt="" className="size-6" />
         <span className="font-semibold tracking-tight">BeaconSync</span>
-        {version && <span className="min-w-0 truncate text-[11px] text-[#555]">{version}</span>}
+        {version && (
+          <span className="min-w-0 truncate text-[11px] text-[#555]" title={version}>
+            {version}
+          </span>
+        )}
         <UpdateButton />
       </div>
       <nav className="flex flex-col gap-0.5 px-2">
