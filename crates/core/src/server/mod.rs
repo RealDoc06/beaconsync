@@ -111,7 +111,14 @@ pub async fn apply_tree(dir: &Path, tree: &Tree, fetcher: &Fetcher, on: OnProgre
     for path in old.files.keys().filter(|p| !new.files.contains_key(*p)) {
         fs::remove_file(dir.join(path)).ok();
     }
-    write_atomic(&applied_tree_path(dir), &serde_json::to_vec(&new)?)
+    mark_applied(dir, &new)
+}
+
+/// Records `tree` as the pack files the server has, without touching them. Used when an
+/// existing server is imported: its files already match, so the next deploy changes only
+/// what differs.
+pub fn mark_applied(dir: &Path, tree: &Tree) -> Result<()> {
+    write_atomic(&applied_tree_path(dir), &serde_json::to_vec(&server_tree(tree))?)
 }
 
 async fn get_json(url: &str) -> Result<serde_json::Value> {
