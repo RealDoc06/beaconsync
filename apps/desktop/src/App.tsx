@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import logo from './assets/logo.svg'
 import { Conflicts } from './components/Conflicts'
 import { Button, Dialog, ProgressBar, Select } from './components/ui'
-import { UpdateButton } from './components/UpdateButton'
+import { UpdateButton, useUpdate } from './components/UpdateButton'
 import { call } from './lib/api'
 import { askConfirm, keys, useAction, useApp, type View } from './lib/store'
 import type { GameFailure, Progress, UpdateView } from './lib/types'
@@ -72,6 +72,7 @@ function Sidebar() {
   const go = useApp((s) => s.go)
   const library = useQuery({ queryKey: keys.library, queryFn: () => call('list_instances') })
   const settings = useQuery({ queryKey: keys.settings, queryFn: () => call('get_settings') })
+  const version = useUpdate()?.current
   const tracked = library.data?.filter((i) => i.tracked) ?? []
 
   const nav = (name: 'library' | 'join' | 'settings', label: string) => (
@@ -86,9 +87,15 @@ function Sidebar() {
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-line">
-      <div className="flex h-12 items-center gap-2 px-4">
+      {isMac && <div data-tauri-drag-region className="h-7 shrink-0" />}
+      <div data-tauri-drag-region className="flex h-12 items-center gap-2 px-4">
         <img src={logo} alt="" className="size-6" />
         <span className="font-semibold tracking-tight">BeaconSync</span>
+        {version && (
+          <span className="min-w-0 truncate text-[11px] text-[#555]" title={version}>
+            {version}
+          </span>
+        )}
         <UpdateButton />
       </div>
       <nav className="flex flex-col gap-0.5 px-2">
@@ -194,6 +201,10 @@ function ConfirmDialog() {
     </Dialog>
   )
 }
+
+/** macOS draws the traffic lights over the app (`titleBarStyle: Overlay`); other platforms keep
+ * their native title bar. */
+const isMac = navigator.userAgent.includes('Mac')
 
 // Colons can't appear in Minecraft names, so these never collide with an account.
 const ADD = ':add'
