@@ -419,7 +419,7 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "beacon-cli"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "anyhow",
  "beacon-core",
@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "beacon-core"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "anyhow",
  "dirs 6.0.0",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "beacon-hub"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "anyhow",
  "argon2",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "beaconsync-desktop"
-version = "0.1.0-alpha.4"
+version = "0.1.0-alpha.5"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
