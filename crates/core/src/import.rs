@@ -500,7 +500,7 @@ pub async fn import_server(
     let game = instance::game_dir(&dir);
     for folder in SERVER_PACK_DIRS {
         let from = server.join(folder);
-        if !from.exists() {
+        if !from.try_exists().with_context(|| format!("reading {}", from.display()))? {
             continue;
         }
         // Linked mods and configs are part of what the server runs, so links are followed.
