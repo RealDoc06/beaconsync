@@ -95,3 +95,26 @@ async fn toggling_a_mod_twice_is_a_noop() {
     write(&repo, "mods/thing.jar", "other bytes");
     assert!(repo.set_enabled("mods/thing.jar", false).is_err());
 }
+
+#[tokio::test]
+async fn launch_rewrites_are_not_changes() {
+    let (_tmp, repo) = new_repo();
+    write(&repo, "config/iris.properties", "#Iris\n#Tue Nov 10 15:23:57 CET 2026\nenableShaders=false\n");
+    write(&repo, "config/sodium-options.json", "{}");
+    repo.commit("v1", "me").await.unwrap();
+
+    // The game stamps a new date and refreshes mod caches on launch.
+    write(&repo, "config/iris.properties", "#Iris\n#Thu Nov 12 19:43:27 CET 2026\nenableShaders=false\n");
+    write(&repo, ".mods/cape-provider/texture-cache/providers.json", "{}");
+    write(&repo, "config/mod/texture-cache/a.bin", "x");
+    // Files saved before being ignored do not show up as removed.
+    write(&repo, ".beaconignore", "sodium-options.json\n");
+    let paths: Vec<_> = repo.status().unwrap().diff.files.into_iter().map(|c| c.path).collect();
+    assert_eq!(paths, [".beaconignore"]);
+    repo.commit("v2", "me").await.unwrap();
+
+    // A real setting change still shows.
+    write(&repo, "config/iris.properties", "#Iris\n#Thu Nov 12 19:50:00 CET 2026\nenableShaders=true\n");
+    let kinds: Vec<_> = repo.status().unwrap().diff.files.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, [ChangeKind::Modified]);
+}

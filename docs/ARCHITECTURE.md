@@ -111,7 +111,9 @@ upstream tree at the last sync and is the merge base for "Get updates from upstr
 ### Tracked files
 
 Everything under `minecraft/` except a default ignore list (saves, logs, crash reports, screenshots,
-caches, options.txt, server lists...) plus gitignore style rules in `minecraft/.beaconignore`.
+hidden root folders, `*cache` folders, options.txt, server lists...) plus gitignore style rules in
+`minecraft/.beaconignore`. A `.properties` file whose settings match the saved version is not a
+change: Java rewrites the date comment on every save, so launching the game alone would be one.
 
 ## Hub API
 
