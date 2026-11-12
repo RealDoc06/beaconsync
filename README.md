@@ -97,17 +97,22 @@ New pack → add mods → Save version → Publish. Share the code with friends.
 ### 3. Put it on a server
 
 ```sh
-curl -L -o beacon https://github.com/RealDoc06/beaconsync/releases/latest/download/beacon-x86_64-unknown-linux-musl
-chmod +x beacon
-./beacon login            # shows a code; approve it in the app (Settings > Approve a device) or at <hub>/device
-./beacon server install   # pick the pack, then service / docker / plain
-./beacon server status    # version, backups, hub state
+curl -fsSL https://github.com/RealDoc06/beaconsync/releases/latest/download/install.sh | bash
+beacon login            # shows a code; approve it in the app (Settings > Approve a device) or at <hub>/device
+beacon server install   # pick the pack, then service / docker / plain
+beacon server status    # version, backups, hub state
 ```
+
+The script installs `beacon` for Linux or macOS (x64 or arm64) to `~/.local/bin`, or
+`/usr/local/bin` as root, after checking GitHub's checksum, and says if that folder still needs
+adding to your `PATH`. Pin a version with
+`| bash -s -- 0.1.0-alpha.4`, pick the folder with `BEACON_INSTALL_DIR`. On Windows download
+`beacon-x86_64-pc-windows-msvc.exe` from Releases.
 
 Already running a server? Bring it in instead of installing a new one:
 
 ```sh
-./beacon server import /path/to/server   # its mods and configs become a pack, published as v1.0
+beacon server import /path/to/server   # its mods and configs become a pack, published as v1.0
 ```
 
 The Minecraft version and loader are detected (pass `--mc` / `--loader` if not), the world and
