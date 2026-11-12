@@ -104,7 +104,8 @@ beacon server status    # version, backups, hub state
 ```
 
 The script installs `beacon` for Linux or macOS (x64 or arm64) to `~/.local/bin`, or
-`/usr/local/bin` as root, after checking GitHub's checksum. Pin a version with
+`/usr/local/bin` as root, after checking GitHub's checksum, and says if that folder still needs
+adding to your `PATH`. Pin a version with
 `| bash -s -- 0.1.0-alpha.4`, pick the folder with `BEACON_INSTALL_DIR`. On Windows download
 `beacon-x86_64-pc-windows-msvc.exe` from Releases.
 
