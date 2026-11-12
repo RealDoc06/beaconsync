@@ -66,6 +66,14 @@ jobs:
           gh release upload "${GITHUB_REF_NAME}" out/* --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+      # Handed to hub-image directly: a draft release isn't visible to its read-only token.
+      - name: Keep the hub binary for the image
+        if: endsWith(matrix.target, '-linux-musl')
+        uses: actions/upload-artifact@v4
+        with:
+          name: hub-${{ matrix.target }}
+          path: out/beacon-hub-${{ matrix.target }}
+          retention-days: 1
 
   desktop:
     needs: release
@@ -168,14 +176,16 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: Fetch the hub binaries
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hub-*-linux-musl
+          path: hub-bin
+          merge-multiple: true
+      - name: Name the hub binaries by Docker arch
         run: |
-          gh release download "${GITHUB_REF_NAME}" -D hub-bin -p 'beacon-hub-*-unknown-linux-musl'
           mv hub-bin/beacon-hub-x86_64-unknown-linux-musl hub-bin/beacon-hub-amd64
           mv hub-bin/beacon-hub-aarch64-unknown-linux-musl hub-bin/beacon-hub-arm64
           chmod +x hub-bin/*
-        env:
-          GH_TOKEN: ${{ github.token }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
