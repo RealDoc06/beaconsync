@@ -39,6 +39,10 @@ export function ChangesTab({ path }: { path: string }) {
     label: 'Undoing changes',
     invalidate: packKeys(path),
   })
+  const ignore = useAction((file: string) => call('ignore_files', { path, files: [file] }), {
+    label: 'Ignoring file',
+    invalidate: packKeys(path),
+  })
   const abort = useAction(() => call('abort_merge', { path }), { label: 'Cancelling merge', invalidate: packKeys(path) })
 
   const s = status.data
@@ -78,7 +82,24 @@ export function ChangesTab({ path }: { path: string }) {
               {g.label} <span className="ml-2 font-normal text-[#666] tabular-nums">{g.items.length}</span>
             </h3>
             {g.items.map((c) => (
-              <ChangeRow key={c.id} c={c} onUndo={() => undo.mutate([c.id])} busy={undo.isPending} />
+              <ChangeRow
+                key={c.id}
+                c={c}
+                onUndo={() => undo.mutate([c.id])}
+                // Ignoring a mod would drop it from the pack, and the ignore list must reach players.
+                onIgnore={
+                  g.key === 'mods' || c.path === '.beaconignore'
+                    ? undefined
+                    : () =>
+                        askConfirm({
+                          title: 'Ignore this file?',
+                          body: `Changes to ${c.path} stop showing up and new versions leave it out. Your copy stays as it is.`,
+                          action: 'Ignore',
+                          onConfirm: () => ignore.mutate(c.path),
+                        })
+                }
+                busy={undo.isPending || ignore.isPending}
+              />
             ))}
           </section>
         ))}
@@ -114,22 +135,31 @@ export function ChangesTab({ path }: { path: string }) {
   )
 }
 
-function ChangeRow({ c, onUndo, busy }: { c: Change; onUndo: () => void; busy: boolean }) {
+function ChangeRow({ c, onUndo, onIgnore, busy }: { c: Change; onUndo: () => void; onIgnore?: () => void; busy: boolean }) {
   const k = KIND[c.kind]
   const name = c.new?.name ?? c.old?.name ?? c.path
   const from = c.old?.version
   const to = c.new?.version
+  const version = c.kind === 'modified' && from && to && from !== to ? `${from} → ${to}` : (to ?? from)
   return (
-    <div className="grid h-9 grid-cols-[80px_minmax(0,1fr)_minmax(0,220px)_60px] items-center gap-3 border-b border-line px-5 hover:bg-hover">
+    <div className="grid h-9 grid-cols-[80px_minmax(0,1fr)_minmax(0,220px)_auto] items-center gap-3 border-b border-line px-5 hover:bg-hover">
       <span className={`text-xs ${k.color}`}>{k.label}</span>
-      <span className="truncate" title={c.path}>
+      {/* Files without a version (configs...) get the version column too. */}
+      <span className={`truncate ${version ? '' : 'col-span-2'}`} title={c.path}>
         {name}
         {name !== c.path && <span className="ml-2 text-xs text-[#555]">{c.path}</span>}
       </span>
-      <span className="truncate text-xs text-muted">{c.kind === 'modified' && from && to && from !== to ? `${from} → ${to}` : (to ?? from ?? '')}</span>
-      <Button small variant="ghost" onClick={onUndo} disabled={busy}>
-        Undo
-      </Button>
+      {version && <span className="truncate text-xs text-muted">{version}</span>}
+      <div className="flex justify-end">
+        {onIgnore && (
+          <Button small variant="ghost" onClick={onIgnore} disabled={busy}>
+            Ignore
+          </Button>
+        )}
+        <Button small variant="ghost" onClick={onUndo} disabled={busy}>
+          Undo
+        </Button>
+      </div>
     </div>
   )
 }

@@ -39,6 +39,7 @@ export interface Commands {
   apply_updates: Cmd<P<{ updates: T.ModUpdate[] }>, null>
   status: Cmd<P, T.Status>
   discard: Cmd<P<{ ids: string[] | null }>, null>
+  ignore_files: Cmd<P<{ files: string[] }>, null>
   save_version: Cmd<P<{ message: string }>, string>
   abort_merge: Cmd<P, null>
   history: Cmd<P, T.History>

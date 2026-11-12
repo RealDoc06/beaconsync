@@ -114,11 +114,11 @@ pub const DEFAULT_IGNORE: &[&str] = &[
     "crash-reports/",
     "screenshots/",
     "backups/",
-    ".cache/",
-    "cache/",
+    // Hidden folders at the root and any `*cache` folder hold launcher and mod runtime data
+    // (`.fabric/`, `.mods/cape-provider/texture-cache/`...) that is rewritten on every launch.
+    "/.*/",
+    "*cache/",
     "natives/",
-    ".fabric/",
-    ".mixin.out/",
     "debug/",
     "downloads/",
     "journeymap/data/",
@@ -429,6 +429,7 @@ impl Repo {
     pub fn scan(&self) -> Result<Tree> {
         let (minecraft, loader) = instance::read_components(&self.root)?;
         let files = self.tracked_files()?;
+        let game = self.game_dir();
         let index: HashMap<String, IndexEntry> = self.read_json("index.json");
         let hashed: Vec<(String, IndexEntry)> = files
             .par_iter()
@@ -451,27 +452,50 @@ impl Repo {
         let staged: HashMap<String, Entry> = self.read_json("staged.json");
         let mut tree = Tree::new(minecraft, loader);
         for (rel, idx) in hashed {
-            let known = head
-                .files
-                .get(&rel)
+            let at_path = head.files.get(&rel);
+            let known = at_path
                 .filter(|e| e.hash == idx.hash)
                 .or_else(|| by_hash.get(idx.hash.as_str()).copied())
                 .or_else(|| staged.get(&idx.hash));
-            let entry = match known {
-                Some(e) => Entry { size: idx.size, ..e.clone() },
-                None => Entry {
-                    side: if client_only_path(&rel) { Side::Client } else { Side::Both },
-                    ..Entry::bare(idx.hash, idx.size)
-                },
+            let entry = if let Some(e) = known {
+                Entry { size: idx.size, ..e.clone() }
+            } else if let Some(saved) = at_path.filter(|e| self.same_properties(&rel, &e.hash, &game.join(&rel))) {
+                // Rewritten with only a new comment (Java stamps the date on every `.properties`
+                // save): keep the saved version so launching the game alone is not a change.
+                saved.clone()
+            } else {
+                Entry { side: if client_only_path(&rel) { Side::Client } else { Side::Both }, ..Entry::bare(idx.hash, idx.size) }
             };
             tree.files.insert(rel, entry);
         }
         Ok(tree)
     }
 
+    /// Whether a `.properties` file on disk matches stored object `hash`, ignoring comments.
+    fn same_properties(&self, rel: &str, hash: &str, file: &Path) -> bool {
+        if !rel.ends_with(".properties") {
+            return false;
+        }
+        let (Ok(old), Ok(new)) = (self.store.get(hash), fs::read(file)) else { return false };
+        let settings = |b: &[u8]| -> Vec<String> {
+            String::from_utf8_lossy(b)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('!'))
+                .map(str::to_string)
+                .collect()
+        };
+        settings(&old) == settings(&new)
+    }
+
     pub fn status(&self) -> Result<Status> {
         let head = self.head_commit()?;
-        let base = head.as_deref().map(|c| self.commit_tree(c)).transpose()?;
+        let mut base = head.as_deref().map(|c| self.commit_tree(c)).transpose()?;
+        // Files saved before they were ignored are not shown as removed.
+        if let Some(b) = &mut base {
+            let ig = self.ignore_matcher()?;
+            b.files.retain(|p, _| !ig.matched_path_or_any_parents(p, false).is_ignore());
+        }
         let work = self.scan()?;
         let diff = match &base {
             Some(b) => diff::diff(b, &work),
@@ -754,6 +778,32 @@ impl Repo {
         let tree = self.scan()?;
         let e = tree.files.get(rel).context("no such file")?;
         self.stage([Entry { side, ..e.clone() }])
+    }
+
+    /// Stops tracking files by adding them to `minecraft/.beaconignore`. The files stay on
+    /// disk; the next saved version leaves them out, for everyone who gets the pack.
+    pub fn ignore(&self, paths: &[String]) -> Result<()> {
+        let file = self.game_dir().join(".beaconignore");
+        let mut text = fs::read_to_string(&file).unwrap_or_default();
+        let mut lines: HashSet<String> = text.lines().map(str::to_string).collect();
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        for p in paths {
+            // Anchored to the game folder, with glob characters taken literally.
+            let mut line = String::from("/");
+            for c in p.chars() {
+                if matches!(c, '\\' | '*' | '?' | '[') {
+                    line.push('\\');
+                }
+                line.push(c);
+            }
+            if lines.insert(line.clone()) {
+                text.push_str(&line);
+                text.push('\n');
+            }
+        }
+        write_atomic(&file, text.as_bytes())
     }
 
     pub fn remove_file(&self, rel: &str) -> Result<()> {

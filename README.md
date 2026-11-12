@@ -43,7 +43,7 @@ More in [docs/screenshots](docs/screenshots).
   Pick the Minecraft account from the sidebar; with the built-in Prism, add (only Microsoft's
   sign-in shows) and remove them there too, while an installed Prism manages its own. Set memory
   per pack, and crashes are reported in the app.
-- **Versions like git.** See unsaved changes, undo them, save a version, view history, roll back
+- **Versions like git.** See unsaved changes, undo or ignore them, save a version, view history, roll back
   to any version (for players and servers too: it is published and deployed), branches and merges. Mods are matched by project, so an updated mod shows
   as one change.
 - **Upstream.** Copy (fork) someone's pack or a Modrinth modpack and later pull their new versions

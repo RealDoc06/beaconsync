@@ -49,6 +49,7 @@ fn main() {
             pack::apply_updates,
             pack::status,
             pack::discard,
+            pack::ignore_files,
             pack::save_version,
             pack::abort_merge,
             pack::history,
