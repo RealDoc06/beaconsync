@@ -418,6 +418,83 @@ pub async fn import_file(file: &Path, root: &Path, cf_key: Option<&str>, author:
     }
 }
 
+/// Folders of an installed server that make up its pack. Worlds, libraries and the server's
+/// own settings (`server.properties`, ops, whitelist) stay with the server.
+pub const SERVER_PACK_DIRS: &[&str] = &["mods", "config", "defaultconfigs", "kubejs", "scripts"];
+
+/// Name of the most recently written subfolder: the version in use when a server was upgraded.
+fn newest_child(dir: &Path) -> Option<String> {
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+}
+
+/// Minecraft version and loader of an installed server, read from what the server and the
+/// loader installers leave behind: `libraries/<loader>/<version>` and `versions/<minecraft>`.
+pub fn detect_server(dir: &Path) -> Result<(String, Loader)> {
+    let lib = |path: &str| newest_child(&dir.join("libraries").join(path));
+    let mut minecraft = None;
+    let loader = if let Some(v) = lib("net/fabricmc/fabric-loader") {
+        Loader { kind: LoaderKind::Fabric, version: Some(v) }
+    } else if let Some(v) = lib("org/quiltmc/quilt-loader") {
+        Loader { kind: LoaderKind::Quilt, version: Some(v) }
+    } else if let Some(v) = lib("net/neoforged/neoforge") {
+        Loader { kind: LoaderKind::Neoforge, version: Some(v) }
+    } else if let Some((mc, v)) = lib("net/minecraftforge/forge").as_deref().and_then(|f| f.split_once('-')) {
+        minecraft = Some(mc.to_string());
+        Loader { kind: LoaderKind::Forge, version: Some(v.to_string()) }
+    } else {
+        Loader::default()
+    };
+    // (Neo)Forge servers keep the game in `libraries/net/minecraft/server/<mc>[-<mcp>]`.
+    let minecraft = minecraft
+        .or_else(|| newest_child(&dir.join("versions")))
+        .or_else(|| lib("net/minecraft/server").map(|v| v.split('-').next().unwrap_or_default().to_string()))
+        .filter(|v| !v.is_empty())
+        .context("can't tell which Minecraft version this server runs")?;
+    Ok((minecraft, loader))
+}
+
+/// A pack name for a server: its MOTD when it is plain text, else the folder name.
+pub fn server_name(dir: &Path) -> String {
+    let props = fs::read_to_string(dir.join("server.properties")).unwrap_or_default();
+    let motd = props.lines().find_map(|l| l.strip_prefix("motd=")).map(str::trim).unwrap_or_default();
+    let plain = !motd.is_empty() && motd != "A Minecraft Server" && !motd.contains(['\\', '§']);
+    if plain {
+        return motd.to_string();
+    }
+    dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Server".into())
+}
+
+/// Creates a pack from an installed server: a new instance in `root` with copies of the
+/// server's [`SERVER_PACK_DIRS`], saved as the first version. The server is only read.
+pub async fn import_server(
+    server: &Path,
+    root: &Path,
+    name: &str,
+    minecraft: &str,
+    loader: &Loader,
+    author: &str,
+) -> Result<Repo> {
+    let dir = instance::unique_dir(root, name);
+    instance::create(&dir, name, minecraft, loader)?;
+    let game = instance::game_dir(&dir);
+    for folder in SERVER_PACK_DIRS {
+        let from = server.join(folder);
+        for e in walkdir::WalkDir::new(&from).into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
+            let dest = game.join(folder).join(e.path().strip_prefix(&from)?);
+            fs::create_dir_all(dest.parent().context("no parent")?)?;
+            fs::copy(e.path(), &dest).with_context(|| format!("copying {}", e.path().display()))?;
+        }
+    }
+    let repo = Repo::init(&dir, repo::local_config(name))?;
+    repo.commit(&format!("Imported from the server at {}", server.display()), author).await?;
+    Ok(repo)
+}
+
 const MRPACK_HOSTS: &[&str] = &["cdn.modrinth.com", "github.com", "raw.githubusercontent.com", "gitlab.com"];
 
 /// Exports the current working tree as a Modrinth `.mrpack`.
@@ -485,4 +562,35 @@ pub fn export_mrpack(repo: &Repo, out: &Path, version_id: &str) -> Result<()> {
     zip.write_all(&serde_json::to_vec_pretty(&index)?)?;
     zip.finish()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod server_tests {
+    use super::*;
+
+    fn mkdirs(root: &Path, dirs: &[&str]) {
+        for d in dirs {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+    }
+
+    #[test]
+    fn detects_installed_servers() {
+        let fabric = tempfile::tempdir().unwrap();
+        mkdirs(fabric.path(), &["libraries/net/fabricmc/fabric-loader/0.20.1", "versions/26.3"]);
+        let forge = tempfile::tempdir().unwrap();
+        mkdirs(forge.path(), &["libraries/net/minecraftforge/forge/1.20.1-47.3.0"]);
+        let neoforge = tempfile::tempdir().unwrap();
+        mkdirs(
+            neoforge.path(),
+            &["libraries/net/neoforged/neoforge/21.1.250", "libraries/net/minecraft/server/1.21.1-20240808.144430"],
+        );
+        let empty = tempfile::tempdir().unwrap();
+
+        let loader = |kind, v: &str| Loader { kind, version: Some(v.into()) };
+        assert_eq!(detect_server(fabric.path()).unwrap(), ("26.3".into(), loader(LoaderKind::Fabric, "0.20.1")));
+        assert_eq!(detect_server(forge.path()).unwrap(), ("1.20.1".into(), loader(LoaderKind::Forge, "47.3.0")));
+        assert_eq!(detect_server(neoforge.path()).unwrap(), ("1.21.1".into(), loader(LoaderKind::Neoforge, "21.1.250")));
+        assert!(detect_server(empty.path()).is_err());
+    }
 }

@@ -43,7 +43,8 @@ fn find(dir: &Path) -> Result<Repo> {
     bail!("not inside a BeaconSync pack (run `beacon init` in an instance folder)")
 }
 
-fn parse_loader(s: &str) -> Result<(LoaderKind, Option<String>)> {
+/// Parses `fabric` or `fabric@0.16.9`; without a version, the newest stable one for `mc`.
+pub(crate) async fn parse_loader(s: &str, mc: &str) -> Result<Loader> {
     let (kind, version) = s.split_once('@').map(|(k, v)| (k, Some(v.to_string()))).unwrap_or((s, None));
     let kind = match kind.to_lowercase().as_str() {
         "vanilla" | "none" => LoaderKind::Vanilla,
@@ -53,11 +54,6 @@ fn parse_loader(s: &str) -> Result<(LoaderKind, Option<String>)> {
         "neoforge" => LoaderKind::Neoforge,
         other => bail!("unknown loader {other}"),
     };
-    Ok((kind, version))
-}
-
-pub async fn new(name: &str, mc: &str, loader: &str) -> Result<()> {
-    let (kind, version) = parse_loader(loader)?;
     let version = match (kind, version) {
         (LoaderKind::Vanilla, _) => None,
         (_, Some(v)) => Some(v),
@@ -74,7 +70,12 @@ pub async fn new(name: &str, mc: &str, loader: &str) -> Result<()> {
             )
         }
     };
-    let loader = Loader { kind, version };
+    Ok(Loader { kind, version })
+}
+
+pub async fn new(name: &str, mc: &str, loader: &str) -> Result<()> {
+    let loader = parse_loader(loader, mc).await?;
+    let kind = loader.kind;
     let dir = instance::unique_dir(&Settings::load().instances_root(), name);
     instance::create(&dir, name, mc, &loader)?;
     let repo = Repo::init(&dir, repo::local_config(name))?;

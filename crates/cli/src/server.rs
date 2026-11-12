@@ -9,13 +9,15 @@ use crate::{
     backups,
     ui::{self, Bar},
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use beacon_core::{
-    api::{AgentConsole, AgentReport, AgentTarget, NewServer, Server, ServerAction, ServerMode},
+    api::{AgentConsole, AgentReport, AgentTarget, NewServer, Release, Server, ServerAction, ServerMode},
     fetch::{Fetcher, Progress},
     hash::short,
     hub::Hub,
+    import,
     model::{Commit, Tree},
+    ops,
     server::{self as srv, ServerConfig},
     settings::Settings,
     store::ObjectStore,
@@ -42,26 +44,32 @@ pub enum ServerCmd {
         /// Pack share code, id or name.
         #[arg(long)]
         pack: Option<String>,
-        #[arg(long, value_enum)]
-        mode: Option<ModeArg>,
         /// Folder to install into.
         #[arg(long)]
         path: Option<PathBuf>,
-        /// Server name shown in the app.
+        #[command(flatten)]
+        setup: Setup,
+    },
+    /// Bring a server you already run into BeaconSync (interactive): its mods and configs
+    /// become a new pack, published as the first release, and the folder is linked in place.
+    /// Worlds and server settings stay as they are.
+    Import {
+        /// Server folder, instead of the current one.
+        path: Option<PathBuf>,
+        /// Name of the new pack. Defaults to the server's MOTD.
         #[arg(long)]
-        name: Option<String>,
-        /// Address players connect to (host:port).
+        pack_name: Option<String>,
+        /// Minecraft version, when it can't be detected.
         #[arg(long)]
-        address: Option<String>,
-        /// Memory for Minecraft in MB.
+        mc: Option<String>,
+        /// Loader, when it can't be detected: fabric, quilt, forge or neoforge (optionally `fabric@0.16.9`).
         #[arg(long)]
-        memory: Option<u32>,
-        /// Accept the Minecraft EULA (https://aka.ms/MinecraftEULA).
-        #[arg(long)]
-        accept_eula: bool,
-        /// Do not start the server after installing.
-        #[arg(long)]
-        no_start: bool,
+        loader: Option<String>,
+        /// Name of the first release.
+        #[arg(long, default_value = "v1.0")]
+        release: String,
+        #[command(flatten)]
+        setup: Setup,
     },
     /// Run the server: supervise Minecraft and apply deployments automatically.
     Run { path: Option<PathBuf> },
@@ -117,6 +125,28 @@ pub struct Target {
     pub path: Option<PathBuf>,
 }
 
+/// How a new server runs. Whatever is left out is asked for.
+#[derive(clap::Args)]
+pub struct Setup {
+    #[arg(long, value_enum)]
+    mode: Option<ModeArg>,
+    /// Server name shown in the app.
+    #[arg(long)]
+    name: Option<String>,
+    /// Address players connect to (host:port).
+    #[arg(long)]
+    address: Option<String>,
+    /// Memory for Minecraft in MB.
+    #[arg(long)]
+    memory: Option<u32>,
+    /// Accept the Minecraft EULA (https://aka.ms/MinecraftEULA).
+    #[arg(long)]
+    accept_eula: bool,
+    /// Do not start the server when done.
+    #[arg(long)]
+    no_start: bool,
+}
+
 #[derive(Subcommand)]
 pub enum BackupCmd {
     /// Back up the whole server now (worlds included).
@@ -153,8 +183,9 @@ pub async fn run(cmd: ServerCmd, global_dir: Option<PathBuf>) -> Result<()> {
         Ok(d.canonicalize().unwrap_or(d))
     };
     match cmd {
-        ServerCmd::Install { pack, mode, path, name, address, memory, accept_eula, no_start } => {
-            install(InstallArgs { pack, mode: mode.map(Into::into), path, name, address, memory, accept_eula, no_start }).await
+        ServerCmd::Install { pack, path, setup } => install(pack, path, setup).await,
+        ServerCmd::Import { path, pack_name, mc, loader, release, setup } => {
+            import(pick(path)?, pack_name, mc, loader, &release, setup).await
         }
         ServerCmd::Run { path } => supervise(pick(path)?).await,
         ServerCmd::Update { path } => update_once(&pick(path)?).await,
@@ -274,38 +305,17 @@ async fn install_self(dir: &Path, mode: ServerMode) -> Result<PathBuf> {
     Ok(dest)
 }
 
-struct InstallArgs {
-    pack: Option<String>,
-    mode: Option<ServerMode>,
-    path: Option<PathBuf>,
-    name: Option<String>,
-    address: Option<String>,
-    memory: Option<u32>,
-    accept_eula: bool,
-    no_start: bool,
+/// The [`Setup`] answers, after asking for what was not passed.
+struct Answers {
+    mode: ServerMode,
+    name: String,
+    address: String,
+    memory_mb: u32,
 }
 
-async fn install(a: InstallArgs) -> Result<()> {
-    let settings = Settings::load();
-    let hub = Hub::authed(&settings).context("run `beacon login` first")?;
-    let packs: Vec<_> = hub.library().await?.into_iter().filter(|p| p.mine).collect();
-    if packs.is_empty() {
-        bail!("you have no published packs; publish one from the app first");
-    }
-    let pack = match &a.pack {
-        Some(q) => packs
-            .iter()
-            .find(|p| p.code.eq_ignore_ascii_case(q) || &p.id == q || p.name.eq_ignore_ascii_case(q))
-            .with_context(|| format!("no pack {q} in your library"))?,
-        None => {
-            let items: Vec<String> =
-                packs.iter().map(|p| format!("{}  {} {} · {}", p.name, p.loader.kind.label(), p.minecraft, p.code)).collect();
-            &packs[ui::select("Which pack?", &items, 0)?]
-        }
-    };
-    let latest = pack.latest.clone().context("this pack has no release yet; publish one first")?;
-    let mode = match a.mode {
-        Some(m) => m,
+fn ask(s: &Setup, default_name: String, port: u16) -> Result<Answers> {
+    let mode = match s.mode {
+        Some(m) => m.into(),
         None => {
             let items = [
                 "Service: starts on boot, restarts on crash, updates on deploy (recommended)".to_string(),
@@ -318,46 +328,45 @@ async fn install(a: InstallArgs) -> Result<()> {
     if mode == ServerMode::Service && !cfg!(target_os = "linux") {
         bail!("service mode uses systemd and needs Linux; pick docker or plain");
     }
-    let name = match a.name {
-        Some(n) => n,
-        None => ui::input("Server name", Some(format!("{} on {}", pack.name, hostname())))?,
+    let name = match &s.name {
+        Some(n) => n.clone(),
+        None => ui::input("Server name", Some(default_name))?,
     };
-    let address = match a.address {
-        Some(x) => x,
-        None => ui::input("Address players connect to", Some(format!("{}:25565", hostname())))?,
+    let address = match &s.address {
+        Some(x) => x.clone(),
+        None => ui::input("Address players connect to", Some(format!("{}:{port}", hostname())))?,
     };
-    let dir = match a.path {
-        Some(p) => p,
-        None => PathBuf::from(ui::input(
-            "Install folder",
-            Some(std::env::current_dir()?.join(srv::slug(&name)).to_string_lossy().into_owned()),
-        )?),
-    };
-    let memory_mb = match a.memory {
+    let memory_mb = match s.memory {
         Some(m) => m,
         None => ui::input("Memory for Minecraft (MB)", Some(default_memory_mb().to_string()))?.parse().context("not a number")?,
     };
-    if ServerConfig::path(&dir).exists() {
-        bail!("{} already has a BeaconSync server; use `beacon server update`", dir.display());
-    }
-    if !a.accept_eula && !ui::confirm("Do you accept the Minecraft EULA (https://aka.ms/MinecraftEULA)?", true)? {
+    Ok(Answers { mode, name, address, memory_mb })
+}
+
+/// Asks to accept the EULA unless `--accept-eula` was passed or the server already did.
+fn eula(s: &Setup, dir: &Path) -> Result<()> {
+    let accepted = fs::read_to_string(dir.join("eula.txt")).is_ok_and(|t| t.lines().any(|l| l.trim() == "eula=true"));
+    if !s.accept_eula && !accepted && !ui::confirm("Do you accept the Minecraft EULA (https://aka.ms/MinecraftEULA)?", true)? {
         bail!("the server can't start without accepting the EULA");
     }
-    fs::create_dir_all(&dir)?;
-    let dir = dir.canonicalize()?;
+    Ok(())
+}
 
-    ui::info(format!("Registering {name} with the hub"));
-    let created = hub.create_server(&pack.id, &NewServer { name: name.clone(), mode, address: address.clone() }).await?;
-    let mut cfg = ServerConfig {
+/// Registers the server with the hub and saves its config in `dir`.
+async fn register(hub: &Hub, pack_id: &str, pack_code: &str, a: Answers, dir: &Path) -> Result<ServerConfig> {
+    ui::info(format!("Registering {} with the hub", a.name));
+    let created =
+        hub.create_server(pack_id, &NewServer { name: a.name.clone(), mode: a.mode, address: a.address.clone() }).await?;
+    let cfg = ServerConfig {
         format: 1,
-        name: name.clone(),
-        mode,
-        address,
+        name: a.name,
+        mode: a.mode,
+        address: a.address,
         hub: Some(hub.base.clone()),
-        pack_code: Some(pack.code.clone()),
+        pack_code: Some(pack_code.to_string()),
         server_id: Some(created.server.id.clone()),
         token: Some(created.token.clone()),
-        memory_mb,
+        memory_mb: a.memory_mb,
         jvm_args: vec!["-XX:+UseG1GC".into(), "-XX:+ParallelRefProcEnabled".into(), "-XX:MaxGCPauseMillis=200".into()],
         java: PathBuf::from("java"),
         start: vec![],
@@ -365,39 +374,168 @@ async fn install(a: InstallArgs) -> Result<()> {
         release_name: None,
         installed: None,
     };
-    cfg.save(&dir)?;
+    cfg.save(dir)?;
+    Ok(cfg)
+}
 
+/// What happens to a new service or container once it is set up.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Launch {
+    /// Start it now and on boot.
+    Now,
+    /// Start it on boot only (`--no-start`).
+    OnBoot,
+    /// Leave starting it to the user: another server still runs in the folder.
+    Manual,
+}
+
+/// The last steps of install and import: EULA, `beacon` next to the server, loader and start
+/// scripts, then the service or container.
+async fn finish(dir: &Path, mut cfg: ServerConfig, tree: &Tree, release: &Release, launch: Launch, done: String) -> Result<()> {
+    srv::accept_eula(dir)?;
+    let beacon = install_self(dir, cfg.mode).await?;
+    if cfg.mode != ServerMode::Docker {
+        let bar = Bar::new();
+        srv::ensure_loader(dir, &mut cfg, tree, &|p| bar.update(p)).await?;
+        bar.done();
+        srv::write_start_scripts(dir, &cfg)?;
+    }
+    cfg.commit = Some(release.commit.clone());
+    cfg.release_name = Some(release.name.clone());
+    cfg.save(dir)?;
+    report(&agent_hub(&cfg), None, "idle", format!("installed {}", release.name), cfg.commit.clone()).await;
+    ui::ok(done);
+    match cfg.mode {
+        ServerMode::Plain => {
+            println!();
+            let script = if cfg!(windows) { "start.bat" } else { "./start.sh" };
+            println!("  Start it:      cd {} && {script}", dir.display());
+            println!("  Auto updates:  {} server run {}", beacon.display(), dir.display());
+            Ok(())
+        }
+        ServerMode::Service => setup_service(&cfg, &beacon, dir, launch),
+        ServerMode::Docker => setup_docker(&cfg, tree, dir, launch),
+    }
+}
+
+async fn install(pack: Option<String>, path: Option<PathBuf>, s: Setup) -> Result<()> {
+    let settings = Settings::load();
+    let hub = Hub::authed(&settings).context("run `beacon login` first")?;
+    let packs: Vec<_> = hub.library().await?.into_iter().filter(|p| p.mine).collect();
+    if packs.is_empty() {
+        bail!("you have no published packs; publish one from the app first");
+    }
+    let pack = match &pack {
+        Some(q) => packs
+            .iter()
+            .find(|p| p.code.eq_ignore_ascii_case(q) || &p.id == q || p.name.eq_ignore_ascii_case(q))
+            .with_context(|| format!("no pack {q} in your library"))?,
+        None => {
+            let items: Vec<String> =
+                packs.iter().map(|p| format!("{}  {} {} · {}", p.name, p.loader.kind.label(), p.minecraft, p.code)).collect();
+            &packs[ui::select("Which pack?", &items, 0)?]
+        }
+    };
+    let latest = pack.latest.clone().context("this pack has no release yet; publish one first")?;
+    let a = ask(&s, format!("{} on {}", pack.name, hostname()), 25565)?;
+    let dir = match path {
+        Some(p) => p,
+        None => PathBuf::from(ui::input(
+            "Install folder",
+            Some(std::env::current_dir()?.join(srv::slug(&a.name)).to_string_lossy().into_owned()),
+        )?),
+    };
+    if ServerConfig::path(&dir).exists() {
+        bail!("{} already has a BeaconSync server; use `beacon server update`", dir.display());
+    }
+    eula(&s, &dir)?;
+    fs::create_dir_all(&dir)?;
+    let dir = dir.canonicalize()?;
+
+    let cfg = register(&hub, &pack.id, &pack.code, a, &dir).await?;
     let store = ObjectStore::new(dir.join(".beacon/objects"));
     let tree = fetch_tree(&hub, &store, &latest.commit).await?;
     let bar = Bar::new();
     let fetcher = Fetcher::new(Some(store), Some(hub.base.clone()));
     srv::apply_tree(&dir, &tree, &fetcher, &|p| bar.update(p)).await?;
     bar.done();
-    srv::accept_eula(&dir)?;
-    let beacon = install_self(&dir, mode).await?;
-    if mode != ServerMode::Docker {
-        let bar = Bar::new();
-        srv::ensure_loader(&dir, &mut cfg, &tree, &|p| bar.update(p)).await?;
-        bar.done();
-        srv::write_start_scripts(&dir, &cfg)?;
-    }
-    cfg.commit = Some(latest.commit.clone());
-    cfg.release_name = Some(latest.name.clone());
-    cfg.save(&dir)?;
-    let agent = agent_hub(&cfg);
-    report(&agent, None, "idle", format!("installed {}", latest.name), cfg.commit.clone()).await;
-    ui::ok(format!("Installed {} {} in {}", pack.name, latest.name, dir.display()));
+    let launch = if s.no_start { Launch::OnBoot } else { Launch::Now };
+    finish(&dir, cfg, &tree, &latest, launch, format!("Installed {} {} in {}", pack.name, latest.name, dir.display())).await
+}
 
-    match mode {
-        ServerMode::Plain => {
-            println!();
-            let script = if cfg!(windows) { "start.bat" } else { "./start.sh" };
-            println!("  Start it:      cd {} && {script}", dir.display());
-            println!("  Auto updates:  {} server run {}", beacon.display(), dir.display());
-        }
-        ServerMode::Service => setup_service(&cfg, &beacon, &dir, a.no_start)?,
-        ServerMode::Docker => setup_docker(&cfg, &tree, &dir, a.no_start)?,
+/// `server-port` from `server.properties`.
+fn properties_port(dir: &Path) -> u16 {
+    fs::read_to_string(dir.join("server.properties"))
+        .ok()
+        .and_then(|p| p.lines().find_map(|l| l.strip_prefix("server-port=")?.trim().parse().ok()))
+        .unwrap_or(25565)
+}
+
+async fn import(
+    dir: PathBuf,
+    pack_name: Option<String>,
+    mc: Option<String>,
+    loader: Option<String>,
+    release: &str,
+    s: Setup,
+) -> Result<()> {
+    if ServerConfig::path(&dir).exists() {
+        bail!("{} is already a BeaconSync server", dir.display());
     }
+    if !dir.join("server.properties").is_file() && !dir.join("mods").is_dir() {
+        bail!("{} doesn't look like a Minecraft server (no server.properties or mods folder)", dir.display());
+    }
+    let settings = Settings::load();
+    let hub = Hub::authed(&settings).context("run `beacon login` first")?;
+    let detected = import::detect_server(&dir).map_err(|e| anyhow!("{e:#}; pass --mc and --loader"));
+    let minecraft = match mc {
+        Some(v) => v,
+        None => detected.as_ref().map_err(|e| anyhow!("{e:#}"))?.0.clone(),
+    };
+    let loader = match loader {
+        Some(l) => crate::pack::parse_loader(&l, &minecraft).await?,
+        None => detected.as_ref().map_err(|e| anyhow!("{e:#}"))?.1.clone(),
+    };
+    let mods = fs::read_dir(dir.join("mods"))
+        .map(|r| r.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "jar")).count())
+        .unwrap_or(0);
+    ui::info(format!(
+        "{} {} server for Minecraft {minecraft} with {mods} mods",
+        loader.kind.label(),
+        loader.version.as_deref().unwrap_or("")
+    ));
+    let pack_name = match pack_name {
+        Some(n) => n,
+        None => ui::input("Pack name", Some(import::server_name(&dir)))?,
+    };
+    let port = properties_port(&dir);
+    let a = ask(&s, format!("{pack_name} on {}", hostname()), port)?;
+    eula(&s, &dir)?;
+    fs::create_dir_all(dir.join(".beacon")).with_context(|| format!("can't write to {}", dir.display()))?;
+    // Minecraft may still be running from this folder; then the switch is left to the user.
+    let running = std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(500)).is_ok();
+
+    ui::info("Saving the server's mods and configs as a pack");
+    let repo =
+        import::import_server(&dir, &settings.instances_root(), &pack_name, &minecraft, &loader, &crate::pack::author()).await?;
+    let rel = ops::publish(&repo, &hub, release, "Imported from the server").await?;
+    let remote = repo.config()?.remote.context("the pack was not published")?;
+    ui::ok(format!("Published {pack_name} {} · share code {}", rel.name, remote.code));
+    let tree = repo.commit_tree(&rel.commit)?;
+    let cfg = register(&hub, &remote.pack, &remote.code, a, &dir).await?;
+    // The pack came from these files, so nothing is downloaded over them.
+    srv::mark_applied(&dir, &tree)?;
+    let launch = match (running, s.no_start) {
+        (true, _) => Launch::Manual,
+        (false, true) => Launch::OnBoot,
+        (false, false) => Launch::Now,
+    };
+    let done = format!("{} now follows {pack_name} {}", cfg.name, rel.name);
+    finish(&dir, cfg, &tree, &rel, launch, done).await?;
+    if running {
+        ui::warn(format!("A server is still running on port {port}. Stop it, then start this one."));
+    }
+    println!("  Pack:     {}", repo.root.display());
     Ok(())
 }
 
@@ -423,7 +561,7 @@ fn current_user() -> String {
     std::env::var("SUDO_USER").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "root".into())
 }
 
-fn setup_service(cfg: &ServerConfig, beacon: &Path, dir: &Path, no_start: bool) -> Result<()> {
+fn setup_service(cfg: &ServerConfig, beacon: &Path, dir: &Path, launch: Launch) -> Result<()> {
     let name = srv::service_name(cfg);
     let unit_file = dir.join(format!("{name}.service"));
     fs::write(&unit_file, srv::systemd_unit(cfg, beacon, dir, &current_user()))?;
@@ -436,12 +574,15 @@ fn setup_service(cfg: &ServerConfig, beacon: &Path, dir: &Path, no_start: bool) 
     }
     sudo(&["install", "-m", "644", &unit, &target])?;
     sudo(&["systemctl", "daemon-reload"])?;
-    if no_start {
-        sudo(&["systemctl", "enable", &name])?;
-    } else {
-        sudo(&["systemctl", "enable", "--now", &name])?;
+    let state = match launch {
+        Launch::Now => sudo(&["systemctl", "enable", "--now", &name]).map(|_| "started"),
+        Launch::OnBoot => sudo(&["systemctl", "enable", &name]).map(|_| "enabled"),
+        Launch::Manual => Ok("installed"),
+    }?;
+    ui::ok(format!("Service {name} {state}"));
+    if launch == Launch::Manual {
+        println!("  Start:    sudo systemctl enable --now {name}");
     }
-    ui::ok(format!("Service {name} {}", if no_start { "enabled" } else { "started" }));
     println!("  Logs:     journalctl -u {name} -f");
     println!("  Restart:  sudo systemctl restart {name}");
     Ok(())
@@ -457,16 +598,19 @@ fn uid_gid() -> Option<(u32, u32)> {
     None
 }
 
-fn setup_docker(cfg: &ServerConfig, tree: &Tree, dir: &Path, no_start: bool) -> Result<()> {
+fn setup_docker(cfg: &ServerConfig, tree: &Tree, dir: &Path, launch: Launch) -> Result<()> {
     fs::create_dir_all(dir.join(".beacon/home"))?;
     let java = beacon_core::meta::java_for(&tree.minecraft);
     fs::write(dir.join("docker-compose.yml"), srv::docker_compose(cfg, java, uid_gid()))?;
     ui::ok("Wrote docker-compose.yml");
-    if !no_start {
+    let compose = dir.join("docker-compose.yml");
+    if launch == Launch::Now {
         run_cmd("docker", &["compose", "up", "-d"], dir)?;
         ui::ok("Container started (first start installs the loader, give it a minute)");
+    } else {
+        println!("  Start:    docker compose -f {} up -d", compose.display());
     }
-    println!("  Logs:     docker compose -f {} logs -f", dir.join("docker-compose.yml").display());
+    println!("  Logs:     docker compose -f {} logs -f", compose.display());
     println!("  Console:  docker attach beacon-{}", srv::slug(&cfg.name));
     Ok(())
 }
