@@ -780,6 +780,32 @@ impl Repo {
         self.stage([Entry { side, ..e.clone() }])
     }
 
+    /// Stops tracking files by adding them to `minecraft/.beaconignore`. The files stay on
+    /// disk; the next saved version leaves them out, for everyone who gets the pack.
+    pub fn ignore(&self, paths: &[String]) -> Result<()> {
+        let file = self.game_dir().join(".beaconignore");
+        let mut text = fs::read_to_string(&file).unwrap_or_default();
+        let mut lines: HashSet<String> = text.lines().map(str::to_string).collect();
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        for p in paths {
+            // Anchored to the game folder, with glob characters taken literally.
+            let mut line = String::from("/");
+            for c in p.chars() {
+                if matches!(c, '\\' | '*' | '?' | '[') {
+                    line.push('\\');
+                }
+                line.push(c);
+            }
+            if lines.insert(line.clone()) {
+                text.push_str(&line);
+                text.push('\n');
+            }
+        }
+        write_atomic(&file, text.as_bytes())
+    }
+
     pub fn remove_file(&self, rel: &str) -> Result<()> {
         fs::remove_file(self.game_dir().join(rel))?;
         Ok(())

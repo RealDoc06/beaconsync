@@ -220,6 +220,12 @@ pub async fn discard(app: AppHandle, path: String, ids: Option<Vec<String>>) -> 
     Ok(())
 }
 
+/// Stops tracking files: adds them to `.beaconignore`, leaving them on disk.
+#[tauri::command]
+pub async fn ignore_files(path: String, files: Vec<String>) -> Res<()> {
+    Ok(open(&path)?.ignore(&files)?)
+}
+
 #[tauri::command]
 pub async fn save_version(path: String, message: String) -> Res<String> {
     let message = if message.trim().is_empty() { "Saved changes".to_string() } else { message };

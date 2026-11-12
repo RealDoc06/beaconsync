@@ -118,3 +118,23 @@ async fn launch_rewrites_are_not_changes() {
     let kinds: Vec<_> = repo.status().unwrap().diff.files.iter().map(|c| c.kind).collect();
     assert_eq!(kinds, [ChangeKind::Modified]);
 }
+
+#[tokio::test]
+async fn ignored_files_stop_showing_but_stay_on_disk() {
+    let (_tmp, repo) = new_repo();
+    write(&repo, "config/sodium-options.json", "a");
+    write(&repo, "config/weird[1].txt", "a");
+    repo.commit("v1", "me").await.unwrap();
+
+    write(&repo, "config/sodium-options.json", "b");
+    write(&repo, "config/weird[1].txt", "b");
+    repo.ignore(&["config/sodium-options.json".into(), "config/weird[1].txt".into()]).unwrap();
+    repo.ignore(&["config/sodium-options.json".into()]).unwrap();
+    let paths: Vec<_> = repo.status().unwrap().diff.files.into_iter().map(|c| c.path).collect();
+    assert_eq!(paths, [".beaconignore"]);
+    assert_eq!(read(&repo, ".beaconignore").as_deref(), Some("/config/sodium-options.json\n/config/weird\\[1].txt\n"));
+    assert_eq!(read(&repo, "config/sodium-options.json").as_deref(), Some("b"));
+
+    repo.commit("v2", "me").await.unwrap();
+    assert!(!repo.head_tree().unwrap().unwrap().files.contains_key("config/sodium-options.json"));
+}
