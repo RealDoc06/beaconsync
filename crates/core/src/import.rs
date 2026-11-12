@@ -423,13 +423,25 @@ pub async fn import_file(file: &Path, root: &Path, cf_key: Option<&str>, author:
 pub const SERVER_PACK_DIRS: &[&str] = &["mods", "config", "defaultconfigs", "kubejs", "scripts"];
 
 /// Name of the most recently written subfolder: the version in use when a server was upgraded.
-fn newest_child(dir: &Path) -> Option<String> {
-    fs::read_dir(dir)
-        .ok()?
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
+/// `None` when `dir` doesn't exist; unreadable folders are errors, not a missing loader.
+fn newest_child(dir: &Path) -> Result<Option<String>> {
+    let entries = match fs::read_dir(dir) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        r => r.with_context(|| format!("reading {}", dir.display()))?,
+    };
+    let mut newest = None;
+    for e in entries {
+        let e = e?;
+        let meta = e.metadata().with_context(|| format!("reading {}", e.path().display()))?;
+        if !meta.is_dir() {
+            continue;
+        }
+        let modified = meta.modified()?;
+        if newest.as_ref().is_none_or(|(t, _)| modified > *t) {
+            newest = Some((modified, e.file_name().to_string_lossy().into_owned()));
+        }
+    }
+    Ok(newest.map(|(_, name)| name))
 }
 
 /// Minecraft version and loader of an installed server, read from what the server and the
@@ -437,24 +449,28 @@ fn newest_child(dir: &Path) -> Option<String> {
 pub fn detect_server(dir: &Path) -> Result<(String, Loader)> {
     let lib = |path: &str| newest_child(&dir.join("libraries").join(path));
     let mut minecraft = None;
-    let loader = if let Some(v) = lib("net/fabricmc/fabric-loader") {
+    let loader = if let Some(v) = lib("net/fabricmc/fabric-loader")? {
         Loader { kind: LoaderKind::Fabric, version: Some(v) }
-    } else if let Some(v) = lib("org/quiltmc/quilt-loader") {
+    } else if let Some(v) = lib("org/quiltmc/quilt-loader")? {
         Loader { kind: LoaderKind::Quilt, version: Some(v) }
-    } else if let Some(v) = lib("net/neoforged/neoforge") {
+    } else if let Some(v) = lib("net/neoforged/neoforge")? {
         Loader { kind: LoaderKind::Neoforge, version: Some(v) }
-    } else if let Some((mc, v)) = lib("net/minecraftforge/forge").as_deref().and_then(|f| f.split_once('-')) {
+    } else if let Some((mc, v)) = lib("net/minecraftforge/forge")?.as_deref().and_then(|f| f.split_once('-')) {
         minecraft = Some(mc.to_string());
         Loader { kind: LoaderKind::Forge, version: Some(v.to_string()) }
     } else {
         Loader::default()
     };
     // (Neo)Forge servers keep the game in `libraries/net/minecraft/server/<mc>[-<mcp>]`.
-    let minecraft = minecraft
-        .or_else(|| newest_child(&dir.join("versions")))
-        .or_else(|| lib("net/minecraft/server").map(|v| v.split('-').next().unwrap_or_default().to_string()))
-        .filter(|v| !v.is_empty())
-        .context("can't tell which Minecraft version this server runs")?;
+    let minecraft = match minecraft {
+        Some(mc) => Some(mc),
+        None => newest_child(&dir.join("versions"))?,
+    };
+    let minecraft = match minecraft {
+        Some(mc) => Some(mc),
+        None => lib("net/minecraft/server")?.map(|v| v.split('-').next().unwrap_or_default().to_string()),
+    };
+    let minecraft = minecraft.filter(|v| !v.is_empty()).context("can't tell which Minecraft version this server runs")?;
     Ok((minecraft, loader))
 }
 
@@ -484,7 +500,15 @@ pub async fn import_server(
     let game = instance::game_dir(&dir);
     for folder in SERVER_PACK_DIRS {
         let from = server.join(folder);
-        for e in walkdir::WalkDir::new(&from).into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()) {
+        if !from.exists() {
+            continue;
+        }
+        // Linked mods and configs are part of what the server runs, so links are followed.
+        for e in walkdir::WalkDir::new(&from).follow_links(true) {
+            let e = e.with_context(|| format!("reading {}", from.display()))?;
+            if !e.file_type().is_file() {
+                continue;
+            }
             let dest = game.join(folder).join(e.path().strip_prefix(&from)?);
             fs::create_dir_all(dest.parent().context("no parent")?)?;
             fs::copy(e.path(), &dest).with_context(|| format!("copying {}", e.path().display()))?;

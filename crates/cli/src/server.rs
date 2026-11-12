@@ -464,11 +464,11 @@ async fn install(pack: Option<String>, path: Option<PathBuf>, s: Setup) -> Resul
 }
 
 /// `server-port` from `server.properties`.
-fn properties_port(dir: &Path) -> u16 {
-    fs::read_to_string(dir.join("server.properties"))
-        .ok()
-        .and_then(|p| p.lines().find_map(|l| l.strip_prefix("server-port=")?.trim().parse().ok()))
-        .unwrap_or(25565)
+/// A non-empty `key=value` setting from the server's `server.properties`.
+fn property(dir: &Path, key: &str) -> Option<String> {
+    let props = fs::read_to_string(dir.join("server.properties")).ok()?;
+    let v = props.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix('='))?.trim();
+    (!v.is_empty()).then(|| v.to_string())
 }
 
 async fn import(
@@ -479,7 +479,8 @@ async fn import(
     release: &str,
     s: Setup,
 ) -> Result<()> {
-    if ServerConfig::path(&dir).exists() {
+    // A config without a commit is an import that failed halfway; it is redone.
+    if ServerConfig::load(&dir).is_ok_and(|c| c.commit.is_some()) {
         bail!("{} is already a BeaconSync server", dir.display());
     }
     if !dir.join("server.properties").is_file() && !dir.join("mods").is_dir() {
@@ -508,12 +509,17 @@ async fn import(
         Some(n) => n,
         None => ui::input("Pack name", Some(import::server_name(&dir)))?,
     };
-    let port = properties_port(&dir);
+    let port = property(&dir, "server-port").and_then(|p| p.parse().ok()).unwrap_or(25565);
     let a = ask(&s, format!("{pack_name} on {}", hostname()), port)?;
+    if a.mode == ServerMode::Docker && dir.join("docker-compose.yml").exists() {
+        bail!("{} already has a docker-compose.yml; move it or pick another mode", dir.display());
+    }
     eula(&s, &dir)?;
     fs::create_dir_all(dir.join(".beacon")).with_context(|| format!("can't write to {}", dir.display()))?;
     // Minecraft may still be running from this folder; then the switch is left to the user.
-    let running = std::net::TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(500)).is_ok();
+    let ip: std::net::IpAddr =
+        property(&dir, "server-ip").and_then(|ip| ip.parse().ok()).unwrap_or(std::net::Ipv4Addr::LOCALHOST.into());
+    let running = std::net::TcpStream::connect_timeout(&(ip, port).into(), Duration::from_millis(500)).is_ok();
 
     ui::info("Saving the server's mods and configs as a pack");
     let repo =
