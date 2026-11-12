@@ -450,6 +450,7 @@ dependencies = [
  "futures",
  "hex",
  "ignore",
+ "libc",
  "rayon",
  "reqwest 0.12.28",
  "serde",
