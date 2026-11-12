@@ -8,6 +8,7 @@
 
 pub mod accounts;
 mod builtin;
+mod process;
 
 pub use accounts::Account;
 
@@ -21,7 +22,7 @@ use serde::Serialize;
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::Command,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     time::SystemTime,
 };
@@ -95,7 +96,7 @@ pub enum Failure {
 
 /// A Prism process started by [`launch`]. Dropping it leaves Prism and the game running.
 pub struct Session {
-    child: Child,
+    child: process::Process,
     _running: Running,
     game_dir: PathBuf,
     /// Prism's own log, for launches that fail before the game writes one.
@@ -105,7 +106,7 @@ pub struct Session {
 
 impl Session {
     fn start(mut cmd: Command, running: Running, instance: &Path, prism_data: Option<PathBuf>) -> Result<Self> {
-        let child = cmd.spawn().context("starting Prism Launcher")?;
+        let child = process::spawn(&mut cmd).context("starting Prism Launcher")?;
         Ok(Self {
             child,
             _running: running,
@@ -176,9 +177,7 @@ pub async fn launch(instance: &Path, s: &Settings, server: Option<&str>, on: OnP
 
 /// Opens the installed Prism's window, where players manage its accounts.
 pub fn open_installed(s: &Settings) -> Result<()> {
-    let mut child = installed(s.prism_path.as_deref())
-        .context("Prism Launcher is not installed")?
-        .spawn()
+    let mut child = process::spawn(&mut installed(s.prism_path.as_deref()).context("Prism Launcher is not installed")?)
         .context("starting Prism Launcher")?;
     // Reaped when the player closes it, so the app leaves no zombie behind.
     std::thread::spawn(move || child.wait());

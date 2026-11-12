@@ -7,7 +7,7 @@ use crate::{fetch::OnProgress, instance::prism_data_dir, settings::Settings, sto
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fs, path::PathBuf, process::Child, sync::atomic::Ordering, time::Duration};
+use std::{fs, path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 /// A Minecraft account signed in to Prism.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
@@ -70,7 +70,9 @@ pub async fn sign_in(s: &Settings, on: OnProgress<'_>) -> Result<Option<Account>
     ensure!(!busy(), "Close Minecraft before adding an account");
     let exe = builtin::ensure(on).await?;
     let temp = guard.temp.clone();
-    guard.child = Some(builtin::command(&exe, &temp, &temp.join("instances"))?.spawn().context("starting Prism Launcher")?);
+    guard.child = Some(
+        super::process::spawn(&mut builtin::command(&exe, &temp, &temp.join("instances"))?).context("starting Prism Launcher")?,
+    );
     let raw = loop {
         tokio::time::sleep(Duration::from_millis(500)).await;
         // Prism saves the account with QSaveFile, so a read never sees half a file.
@@ -101,7 +103,7 @@ fn read_if_exists(path: &std::path::Path) -> Result<Option<Vec<u8>>> {
 /// One sign-in at a time. Dropping it closes the throwaway Prism and deletes its folder (and
 /// the tokens in it) on every exit path.
 struct SignIn {
-    child: Option<Child>,
+    child: Option<super::process::Process>,
     temp: PathBuf,
 }
 
