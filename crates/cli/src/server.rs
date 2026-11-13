@@ -68,6 +68,10 @@ pub enum ServerCmd {
         /// Name of the first release.
         #[arg(long, default_value = FIRST_RELEASE)]
         release: String,
+        /// Run it from a copy in this new folder, keeping the original untouched as a fallback.
+        /// Asked when left out.
+        #[arg(long)]
+        into: Option<PathBuf>,
         #[command(flatten)]
         setup: Setup,
     },
@@ -187,8 +191,8 @@ pub async fn run(cmd: ServerCmd, global_dir: Option<PathBuf>) -> Result<()> {
     };
     match cmd {
         ServerCmd::Install { pack, path, setup } => install(pack, path, setup).await,
-        ServerCmd::Import { path, pack_name, mc, loader, release, setup } => {
-            import(pick(path)?, pack_name, mc, loader, &release, setup).await
+        ServerCmd::Import { path, pack_name, mc, loader, release, into, setup } => {
+            import(pick(path)?, pack_name, mc, loader, &release, into, setup).await
         }
         ServerCmd::Run { path } => supervise(pick(path)?).await,
         ServerCmd::Update { path } => update_once(&pick(path)?).await,
@@ -476,12 +480,16 @@ fn property(dir: &Path, key: &str) -> Option<String> {
 }
 
 /// Brings an existing server in (`beacon server import`); also run by the TUI's "import server".
+/// The server runs in place, or from a copy in `into` (asked when `None`) so the original
+/// stays as it was.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn import(
     dir: PathBuf,
     pack_name: Option<String>,
     mc: Option<String>,
     loader: Option<String>,
     release: &str,
+    into: Option<PathBuf>,
     s: Setup,
 ) -> Result<()> {
     // A config without a commit is an import that failed halfway; it is redone.
@@ -527,15 +535,40 @@ pub(crate) async fn import(
     };
     let port = property(&dir, "server-port").and_then(|p| p.parse().ok()).unwrap_or(25565);
     let a = ask(&s, format!("{pack_name} on {}", hostname()), port)?;
+    let into = match into {
+        Some(t) => Some(t),
+        None => {
+            let copy = if writable(&dir) {
+                let items =
+                    [format!("Here, in {}", dir.display()), "From a copy in a new folder (the original stays as it is)".into()];
+                ui::select("Where should it run?", &items, 0)? == 1
+            } else {
+                ui::warn(format!("{} can't write to {}, so it runs from a copy", current_user(), dir.display()));
+                true
+            };
+            let default = std::env::current_dir()?.join(srv::slug(&a.name));
+            copy.then(|| ui::input("New folder", Some(default.to_string_lossy().into_owned())).map(PathBuf::from)).transpose()?
+        }
+    };
+    // A copy brings the compose file along, so the original decides in both cases.
     if a.mode == ServerMode::Docker && dir.join("docker-compose.yml").exists() {
         bail!("{} already has a docker-compose.yml; move it or pick another mode", dir.display());
     }
     eula(&s, &dir)?;
-    fs::create_dir_all(dir.join(".beacon")).with_context(|| format!("can't write to {}", dir.display()))?;
-    // Minecraft may still be running from this folder; then the switch is left to the user.
+    // Minecraft may still be running from the original folder; then the switch is left to the user.
     let ip: std::net::IpAddr =
         property(&dir, "server-ip").and_then(|ip| ip.parse().ok()).unwrap_or(std::net::Ipv4Addr::LOCALHOST.into());
     let running = std::net::TcpStream::connect_timeout(&(ip, port).into(), Duration::from_millis(500)).is_ok();
+    let dir = match into {
+        Some(to) => {
+            if running {
+                ui::warn("The server is running, so its world may be mid-save in the copy. Stop it first for a clean copy.");
+            }
+            copy_server(&dir, &to)?
+        }
+        None => dir,
+    };
+    fs::create_dir_all(dir.join(".beacon")).with_context(|| format!("can't write to {}", dir.display()))?;
 
     ui::info("Saving the server's mods and configs as a pack");
     let repo =
@@ -559,6 +592,55 @@ pub(crate) async fn import(
     }
     println!("  Pack:     {}", repo.root.display());
     Ok(())
+}
+
+/// True when this user can create files in `dir`.
+fn writable(dir: &Path) -> bool {
+    let probe = dir.join(".beacon-write-test");
+    let ok = fs::write(&probe, b"").is_ok();
+    fs::remove_file(&probe).ok();
+    ok
+}
+
+/// Copies a whole server (worlds included) into `to`, which must be new or empty, and returns
+/// its absolute path. Symlinks are recreated, not followed.
+fn copy_server(from: &Path, to: &Path) -> Result<PathBuf> {
+    let from = &from.canonicalize()?;
+    if std::path::absolute(to)?.starts_with(from) {
+        bail!("the copy can't go inside the server it copies");
+    }
+    if fs::read_dir(to).is_ok_and(|mut d| d.next().is_some()) {
+        bail!("{} isn't empty; pick a new folder", to.display());
+    }
+    fs::create_dir_all(to).with_context(|| format!("can't create {}", to.display()))?;
+    let to = to.canonicalize()?;
+    let entries: Vec<_> = walkdir::WalkDir::new(from)
+        .min_depth(1)
+        .into_iter()
+        .filter_entry(|e| e.file_name() != ".beacon")
+        .collect::<Result<_, _>>()
+        .with_context(|| format!("can't read {}", from.display()))?;
+    let files = entries.iter().filter(|e| e.file_type().is_file()).count();
+    ui::info(format!("Copying the server to {}", to.display()));
+    let bar = Bar::new();
+    let mut done = 0;
+    for e in &entries {
+        let dest = to.join(e.path().strip_prefix(from)?);
+        let t = e.file_type();
+        if t.is_dir() {
+            fs::create_dir_all(&dest)?;
+        } else if t.is_symlink() {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(fs::read_link(e.path())?, &dest)?;
+        } else {
+            fs::copy(e.path(), &dest).with_context(|| format!("copying {}", e.path().display()))?;
+            done += 1;
+            bar.update(Progress { done, total: files, label: e.file_name().to_string_lossy().into_owned() });
+        }
+    }
+    bar.done();
+    ui::ok(format!("Copied {files} files; the original in {} is untouched", from.display()));
+    Ok(to)
 }
 
 fn run_cmd(program: &str, args: &[&str], dir: &Path) -> Result<()> {

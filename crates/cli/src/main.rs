@@ -6,6 +6,7 @@
 
 mod account;
 mod backups;
+mod browse;
 mod console;
 mod pack;
 mod server;

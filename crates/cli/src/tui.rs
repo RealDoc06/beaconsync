@@ -8,6 +8,7 @@
 //! tasks that report back over one channel, so the screen never blocks.
 
 use crate::{
+    browse::{self, Browser},
     console::{Out, ServerScreen},
     pack::{author, hub_for},
     server, ui,
@@ -93,7 +94,7 @@ impl Suspend {
     /// Runs in the plain terminal (prompts, sudo), then waits for Enter so the output stays readable.
     async fn run(self) -> Result<String> {
         let r = match self {
-            Suspend::Import(dir) => server::import(dir, None, None, None, server::FIRST_RELEASE, Default::default())
+            Suspend::Import(dir) => server::import(dir, None, None, None, server::FIRST_RELEASE, None, Default::default())
                 .await
                 .map(|()| "Server imported".to_string()),
             Suspend::Install(pack) => {
@@ -156,8 +157,6 @@ enum Ask {
     Save,
     Publish,
     Branch,
-    /// Folder of the server to import.
-    Import,
 }
 
 /// Yes/no prompts.
@@ -179,6 +178,8 @@ enum Modal {
         text: String,
         everyone: Option<bool>,
     },
+    /// Picking a server folder to import.
+    Browse(Browser),
 }
 
 struct App {
@@ -683,8 +684,8 @@ impl App {
             KeyCode::Char(c @ '1'..='5') => self.tab = TABS[c as usize - '1' as usize],
             KeyCode::Char('R') => self.reload_packs(),
             KeyCode::Char('i') => {
-                let value = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
-                self.modal = Some(Modal::Input { ask: Ask::Import, value });
+                let here = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+                self.modal = Some(Modal::Browse(Browser::open(here)));
             }
             KeyCode::Char('c') => match self.owned_pack() {
                 Some(id) => self.suspend = Some(Suspend::Install(id)),
@@ -804,16 +805,21 @@ impl App {
             }
             return;
         }
-        // Importing needs no pack; everything else acts on the selected one.
         let repo = self.local.as_ref().map(|l| l.repo.clone());
         match modal {
+            // Importing needs no pack: it runs suspended.
+            Modal::Browse(mut b) => match b.key(k) {
+                browse::Out::Stay => self.modal = Some(Modal::Browse(b)),
+                browse::Out::Close => {}
+                browse::Out::Pick(dir) => self.suspend = Some(Suspend::Import(dir)),
+            },
             Modal::Input { ask, mut value } => match k.code {
                 KeyCode::Esc => {}
-                KeyCode::Enter if !value.trim().is_empty() => match (ask, repo) {
-                    (Ask::Import, _) => self.suspend = Some(Suspend::Import(server_dir(value.trim()))),
-                    (ask, Some(repo)) => self.submit(ask, value.trim().to_string(), repo),
-                    (_, None) => {}
-                },
+                KeyCode::Enter if !value.trim().is_empty() => {
+                    if let Some(repo) = repo {
+                        self.submit(ask, value.trim().to_string(), repo)
+                    }
+                }
                 KeyCode::Backspace => {
                     value.pop();
                     self.modal = Some(Modal::Input { ask, value });
@@ -855,8 +861,6 @@ impl App {
                 let code = repo.config()?.remote.map(|r| r.code).unwrap_or_default();
                 Ok(format!("Published {}. Share code {code}", rel.name))
             }),
-            // Handled in `modal_key`: it runs suspended and needs no pack.
-            Ask::Import => {}
         }
     }
 
@@ -1215,13 +1219,11 @@ fn draw_modal(f: &mut Frame, m: &Modal) {
                 Ask::Save => " Save a version ",
                 Ask::Publish => " Publish a release ",
                 Ask::Branch => " New branch ",
-                Ask::Import => " Import a server ",
             };
             let hint = match ask {
                 Ask::Save => "What changed?",
                 Ask::Publish => "Release name, e.g. 1.4",
                 Ask::Branch => "Branch name",
-                Ask::Import => "Server folder (the one with server.properties)",
             };
             let lines = vec![
                 Line::from(hint).dark_gray(),
@@ -1246,6 +1248,7 @@ fn draw_modal(f: &mut Frame, m: &Modal) {
             let h = lines.len() as u16 + 2;
             (" Confirm ", lines, h)
         }
+        Modal::Browse(b) => return b.draw(f),
     };
     let rect = Rect {
         x: area.x + (area.width - w) / 2,
@@ -1268,18 +1271,8 @@ fn mark(k: ChangeKind) -> Span<'static> {
     }
 }
 
-/// A typed server folder as an absolute path (`~` expanded): it ends up in service files.
-fn server_dir(typed: &str) -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let dir = match (typed.strip_prefix("~/").or((typed == "~").then_some("")), home) {
-        (Some(rest), Some(home)) => home.join(rest),
-        _ => PathBuf::from(typed),
-    };
-    dir.canonicalize().unwrap_or(dir)
-}
-
 /// Row highlight: a gray bar where keys go, bold elsewhere so the choice stays visible.
-fn highlight(focused: bool) -> Style {
+pub(crate) fn highlight(focused: bool) -> Style {
     if focused { Style::new().bg(Color::Indexed(237)) } else { Style::new().add_modifier(Modifier::BOLD) }
 }
 

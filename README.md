@@ -115,9 +115,12 @@ Already running a server? Bring it in instead of installing a new one:
 beacon server import /path/to/server   # its mods and configs become a pack, published as v1.0
 ```
 
-The Minecraft version and loader are detected (pass `--mc` / `--loader` if not), the world and
-server settings stay as they are, and nothing is downloaded over the existing files. If the old
+The Minecraft version and loader are detected (asked for, or pass `--mc` / `--loader`, if not),
+the world and server settings stay as they are, and nothing is downloaded over the existing
+files. It can run in place or from a copy in a new folder (`--into <folder>`), which leaves the
+original untouched as a fallback; a folder you can't write to always gets a copy. If the old
 server is still running, the import sets everything up but leaves starting the new one to you.
+In the full screen UI, `i` opens a folder browser that marks server folders.
 
 From now on, Deploy in the app updates the server. Manage it from the app (Servers › a server)
 or from the CLI on any machine you are signed in on:
