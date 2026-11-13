@@ -658,13 +658,15 @@ fn copy_tree(from: &Path, to: &Path) -> Result<usize> {
 }
 
 /// `copy_server`'s fallback: `cp -a` as root over whatever `copy_tree` got done, then the copy
-/// is given to this user and the original's `.beacon` dropped.
+/// is given to this user (owner, writable) and the original's `.beacon` dropped.
 fn sudo_copy(from: &Path, to: &Path) -> Result<usize> {
     let (uid, gid) = uid_gid().context("copying with sudo needs a Unix system")?;
     let src = format!("{}/.", from.display());
     let dest = to.to_string_lossy();
     run_cmd("sudo", &["cp", "-a", &src, &dest], to)?;
     run_cmd("sudo", &["chown", "-R", &format!("{uid}:{gid}"), &dest], to)?;
+    // `cp -a` keeps the original's modes; the server still has to write to its copy.
+    run_cmd("sudo", &["chmod", "-R", "u+rwX", &dest], to)?;
     let beacon = to.join(".beacon");
     if beacon.exists() {
         fs::remove_dir_all(&beacon)?;
