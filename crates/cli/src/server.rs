@@ -9,7 +9,7 @@ use crate::{
     backups,
     ui::{self, Bar},
 };
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use beacon_core::{
     api::{AgentConsole, AgentReport, AgentTarget, NewServer, Release, Server, ServerAction, ServerMode},
     fetch::{Fetcher, Progress},
@@ -66,7 +66,7 @@ pub enum ServerCmd {
         #[arg(long)]
         loader: Option<String>,
         /// Name of the first release.
-        #[arg(long, default_value = "v1.0")]
+        #[arg(long, default_value = FIRST_RELEASE)]
         release: String,
         #[command(flatten)]
         setup: Setup,
@@ -125,8 +125,8 @@ pub struct Target {
     pub path: Option<PathBuf>,
 }
 
-/// How a new server runs. Whatever is left out is asked for.
-#[derive(clap::Args)]
+/// How a new server runs. Whatever is left out is asked for (all of it by default).
+#[derive(clap::Args, Default)]
 pub struct Setup {
     #[arg(long, value_enum)]
     mode: Option<ModeArg>,
@@ -176,6 +176,9 @@ impl From<ModeArg> for ServerMode {
         }
     }
 }
+
+/// Release name an imported server's pack is published as, unless `--release` says otherwise.
+pub const FIRST_RELEASE: &str = "v1.0";
 
 pub async fn run(cmd: ServerCmd, global_dir: Option<PathBuf>) -> Result<()> {
     let pick = |p: Option<PathBuf>| -> Result<PathBuf> {
@@ -418,7 +421,8 @@ async fn finish(dir: &Path, mut cfg: ServerConfig, tree: &Tree, release: &Releas
     }
 }
 
-async fn install(pack: Option<String>, path: Option<PathBuf>, s: Setup) -> Result<()> {
+/// Installs a pack's server (`beacon server install`); also run by the TUI's "create server".
+pub(crate) async fn install(pack: Option<String>, path: Option<PathBuf>, s: Setup) -> Result<()> {
     let settings = Settings::load();
     let hub = Hub::authed(&settings).context("run `beacon login` first")?;
     let packs: Vec<_> = hub.library().await?.into_iter().filter(|p| p.mine).collect();
@@ -471,7 +475,8 @@ fn property(dir: &Path, key: &str) -> Option<String> {
     (!v.is_empty()).then(|| v.to_string())
 }
 
-async fn import(
+/// Brings an existing server in (`beacon server import`); also run by the TUI's "import server".
+pub(crate) async fn import(
     dir: PathBuf,
     pack_name: Option<String>,
     mc: Option<String>,
@@ -488,14 +493,25 @@ async fn import(
     }
     let settings = Settings::load();
     let hub = Hub::authed(&settings).context("run `beacon login` first")?;
-    let detected = import::detect_server(&dir).map_err(|e| anyhow!("{e:#}; pass --mc and --loader"));
-    let minecraft = match mc {
-        Some(v) => v,
-        None => detected.as_ref().map_err(|e| anyhow!("{e:#}"))?.0.clone(),
+    // What detection can't tell (and --mc / --loader don't say) is asked for.
+    let detected = import::detect_server(&dir);
+    if let Err(e) = &detected
+        && (mc.is_none() || loader.is_none())
+    {
+        ui::warn(format!("{e:#}"));
+    }
+    let minecraft = match (mc, &detected) {
+        (Some(v), _) => v,
+        (None, Ok((v, _))) => v.clone(),
+        (None, Err(_)) => ui::input("Minecraft version", None)?,
     };
-    let loader = match loader {
-        Some(l) => crate::pack::parse_loader(&l, &minecraft).await?,
-        None => detected.as_ref().map_err(|e| anyhow!("{e:#}"))?.1.clone(),
+    let loader = match (loader, &detected) {
+        (Some(l), _) => crate::pack::parse_loader(&l, &minecraft).await?,
+        (None, Ok((_, l))) => l.clone(),
+        (None, Err(_)) => {
+            let l = ui::input("Loader: fabric, quilt, forge, neoforge or vanilla (optionally fabric@0.16.9)", None)?;
+            crate::pack::parse_loader(&l, &minecraft).await?
+        }
     };
     let mods = fs::read_dir(dir.join("mods"))
         .map(|r| r.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "jar")).count())

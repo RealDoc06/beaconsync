@@ -135,9 +135,11 @@ Inside a server folder `-s` can be left out.
 
 ### CLI for pack authors
 
-Run `beacon` with no command for a full screen UI: your packs on the left, changes, history,
-branches and releases with live server status on the right. Save, roll back, publish, deploy,
-update and play from the keyboard.
+Run `beacon` with no command for a full screen UI: your packs on the left (on this machine and
+in your hub library, with how many servers are online), changes, history, branches and
+releases with live server status on the right. Save, roll back, publish, deploy, update and
+play from the keyboard. On a server machine, `c` creates a server from the selected pack and
+`i` imports an existing one.
 
 ![beacon TUI](docs/screenshots/linux/tui.png)
 

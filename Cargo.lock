@@ -428,6 +428,7 @@ dependencies = [
  "crossterm",
  "dialoguer",
  "flate2",
+ "futures",
  "indicatif",
  "libc",
  "ratatui",
