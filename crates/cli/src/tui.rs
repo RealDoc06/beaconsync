@@ -1,17 +1,20 @@
 //! Full screen terminal UI, opened by running `beacon` with no command.
 //!
-//! Left: the packs on this machine. Right: the selected pack's changes, history, branches
-//! and releases with live server status, and servers you can open for their console and
-//! backups (`console.rs`). Work runs on tokio tasks that report back over one channel, so the
-//! screen never blocks.
+//! Left: the packs on this machine and in your hub library, with how many servers are online
+//! for each. Right: the selected pack's changes, history, branches and releases with live
+//! server status, and servers you can open for their console and backups (`console.rs`).
+//! Packs only on the hub show their servers. Creating or importing a server hands the
+//! terminal to the interactive `beacon server` flow and comes back after. Work runs on tokio
+//! tasks that report back over one channel, so the screen never blocks.
 
 use crate::{
     console::{Out, ServerScreen},
     pack::{author, hub_for},
+    server, ui,
 };
 use anyhow::{Context, Result};
 use beacon_core::{
-    api::{AllServers, ConsoleView, DeployRequest, DeployTargets, Release, Server, ServerAction},
+    api::{AllServers, ConsoleView, DeployRequest, DeployTargets, Pack, Release, Server, ServerAction},
     diff::ChangeKind,
     fetch::Progress,
     hash::short,
@@ -29,7 +32,12 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph},
 };
-use std::{future::Future, path::PathBuf, time::Duration};
+use std::{
+    future::Future,
+    path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -52,6 +60,52 @@ impl Tab {
             Tab::Releases => "Releases",
             Tab::Servers => "Servers",
         }
+    }
+}
+
+/// Which pack a row is: a folder on this machine, or a hub pack with no local copy.
+#[derive(Clone, PartialEq)]
+enum PackKey {
+    Local(PathBuf),
+    Hub(String),
+}
+
+/// A row in the Packs list.
+struct PackRow {
+    key: PackKey,
+    name: String,
+    /// Loader and Minecraft version, e.g. "Fabric 26.3".
+    kind: String,
+    /// The pack in your hub library, once loaded (published local packs and hub-only ones).
+    hub: Option<Pack>,
+    /// Servers online with this pack, once the hub answers.
+    online: Option<usize>,
+}
+
+/// Interactive `beacon server` flows, run with the UI suspended.
+enum Suspend {
+    Import(PathBuf),
+    /// Pack id.
+    Install(String),
+}
+
+impl Suspend {
+    /// Runs in the plain terminal (prompts, sudo), then waits for Enter so the output stays readable.
+    async fn run(self) -> Result<String> {
+        let r = match self {
+            Suspend::Import(dir) => server::import(dir, None, None, None, server::FIRST_RELEASE, Default::default())
+                .await
+                .map(|()| "Server imported".to_string()),
+            Suspend::Install(pack) => {
+                server::install(Some(pack), None, Default::default()).await.map(|()| "Server created".to_string())
+            }
+        };
+        if let Err(e) = &r {
+            ui::warn(format!("{e:#}"));
+        }
+        println!("\n{}", ui::dim("Press Enter to go back"));
+        std::io::stdin().read_line(&mut String::new()).ok();
+        r
     }
 }
 
@@ -86,7 +140,9 @@ enum Msg {
     Key(KeyEvent),
     Redraw,
     Local(PathBuf, Box<Result<Local>>),
-    Remote(PathBuf, Result<Remote>),
+    Remote(PackKey, Result<Remote>),
+    /// Your hub library with each pack's online server count.
+    Library(Result<Vec<(Pack, Option<usize>)>>),
     Progress(Progress),
     Done(Result<String>),
     /// A result to show that needs no reload, e.g. a sent server action.
@@ -100,6 +156,8 @@ enum Ask {
     Save,
     Publish,
     Branch,
+    /// Folder of the server to import.
+    Import,
 }
 
 /// Yes/no prompts.
@@ -125,7 +183,11 @@ enum Modal {
 
 struct App {
     tx: UnboundedSender<Msg>,
-    packs: Vec<InstanceInfo>,
+    /// Tracked packs on this machine with their hub pack id, when published.
+    locals: Vec<(InstanceInfo, Option<String>)>,
+    library: Vec<(Pack, Option<usize>)>,
+    /// `locals` and `library` merged, as listed.
+    packs: Vec<PackRow>,
     pack: ListState,
     /// Keys go to the right pane when true.
     inside: bool,
@@ -141,8 +203,14 @@ struct App {
     busy: Option<(String, Option<Progress>)>,
     note: Option<(bool, String)>,
     account: String,
+    /// Set by a key; the event loop runs it with the UI suspended.
+    suspend: Option<Suspend>,
+    ticks: u32,
     quit: bool,
 }
+
+/// Stops the key reader while a suspended flow owns the terminal, so it gets every key.
+static KEYS_PAUSED: AtomicBool = AtomicBool::new(false);
 
 /// The app channel, fed with key presses from a reader thread.
 fn keys_channel() -> (UnboundedSender<Msg>, UnboundedReceiver<Msg>) {
@@ -150,6 +218,16 @@ fn keys_channel() -> (UnboundedSender<Msg>, UnboundedReceiver<Msg>) {
     let keys = tx.clone();
     std::thread::spawn(move || {
         loop {
+            // Polls instead of blocking on read, so a pause takes effect before the next key.
+            if KEYS_PAUSED.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            match event::poll(Duration::from_millis(100)) {
+                Ok(true) if !KEYS_PAUSED.load(Ordering::SeqCst) => {}
+                Ok(_) => continue,
+                Err(_) => break,
+            }
             let msg = match event::read() {
                 Ok(Event::Key(k)) if k.kind == KeyEventKind::Press => Msg::Key(k),
                 Ok(Event::Resize(..)) => Msg::Redraw,
@@ -191,6 +269,14 @@ async fn event_loop(mut app: App, mut rx: UnboundedReceiver<Msg>) -> Result<()> 
             Some(m) = rx.recv() => app.on(m),
             _ = tick.tick() => app.tick(),
         }
+        if let Some(job) = app.suspend.take() {
+            KEYS_PAUSED.store(true, Ordering::SeqCst);
+            ratatui::restore();
+            let r = job.run().await;
+            term = ratatui::init();
+            KEYS_PAUSED.store(false, Ordering::SeqCst);
+            app.on(Msg::Done(r));
+        }
         if app.quit {
             break Ok(());
         }
@@ -216,12 +302,36 @@ fn read_local(path: PathBuf) -> Result<Local> {
     Ok(Local { repo, cfg, status, log, branches })
 }
 
-async fn read_remote(repo: Repo) -> Result<Remote> {
+/// A local pack's releases and servers, from the hub it was published to.
+async fn read_repo_remote(repo: Repo) -> Result<Remote> {
     let cfg = repo.config()?;
     let remote = cfg.remote.context("not published")?;
-    if cfg.role == Role::Owner {
-        let hub = hub_for(&repo)?;
-        let (releases, servers) = tokio::try_join!(hub.releases(&remote.pack), hub.servers(&remote.pack))?;
+    let owner = cfg.role == Role::Owner;
+    let hub = if owner { hub_for(&repo)? } else { Hub::new(&remote.hub, None) };
+    read_remote(hub, &remote.pack, &remote.code, owner).await
+}
+
+/// Your hub library, each pack with its online server count (`None` when that lookup failed).
+/// Empty when not signed in.
+async fn read_library() -> Result<Vec<(Pack, Option<usize>)>> {
+    let Ok(hub) = Hub::authed(&Settings::load()) else { return Ok(vec![]) };
+    let packs = hub.library().await?;
+    let counts = futures::future::join_all(packs.iter().map(|p| async {
+        let online = if p.mine {
+            hub.servers(&p.id).await.map(|s| s.iter().filter(|s| s.online).count())
+        } else {
+            hub.public_pack(&p.code).await.map(|p| p.servers.iter().filter(|s| s.online).count())
+        };
+        online.ok()
+    }))
+    .await;
+    Ok(packs.into_iter().zip(counts).collect())
+}
+
+/// Releases and servers of a hub pack: full server info for owners, the public view otherwise.
+async fn read_remote(hub: Hub, pack: &str, code: &str, owner: bool) -> Result<Remote> {
+    if owner {
+        let (releases, servers) = tokio::try_join!(hub.releases(pack), hub.servers(pack))?;
         let servers = servers
             .into_iter()
             .map(|s| ServerRow {
@@ -236,7 +346,7 @@ async fn read_remote(repo: Repo) -> Result<Remote> {
             .collect();
         return Ok(Remote { releases, servers });
     }
-    let p = Hub::new(&remote.hub, None).public_pack(&remote.code).await?;
+    let p = hub.public_pack(code).await?;
     let servers = p
         .servers
         .into_iter()
@@ -263,6 +373,8 @@ impl App {
         };
         let mut app = Self {
             tx,
+            locals: vec![],
+            library: vec![],
             packs: vec![],
             pack: ListState::default(),
             inside: false,
@@ -276,6 +388,8 @@ impl App {
             busy: None,
             note: None,
             account,
+            suspend: None,
+            ticks: 0,
             quit: false,
         };
         if packs {
@@ -310,43 +424,134 @@ impl App {
         });
     }
 
+    /// Rescans local packs and refetches the library, then reloads the selected pack.
     fn reload_packs(&mut self) {
-        self.packs = instance::list(&Settings::load().instance_roots()).into_iter().filter(|i| i.tracked).collect();
-        let sel = self.pack.selected().unwrap_or(0).min(self.packs.len().saturating_sub(1));
-        self.pack.select((!self.packs.is_empty()).then_some(sel));
+        self.locals = instance::list(&Settings::load().instance_roots())
+            .into_iter()
+            .filter(|i| i.tracked)
+            .map(|i| {
+                let id = Repo::open(&i.path).and_then(|r| r.config()).ok().and_then(|c| c.remote).map(|r| r.pack);
+                (i, id)
+            })
+            .collect();
+        self.merge();
         self.load(true);
+        self.load_library();
+    }
+
+    fn load_library(&self) {
+        let tx = self.tx.clone();
+        tokio::spawn(async move { tx.send(Msg::Library(read_library().await)).ok() });
+    }
+
+    /// Rebuilds `packs` from `locals` and `library`, keeping the selected pack selected.
+    fn merge(&mut self) {
+        let keep = self.row().map(|r| r.key.clone());
+        let find = |id: &Option<String>| self.library.iter().find(|(p, _)| Some(&p.id) == id.as_ref());
+        let mut rows: Vec<PackRow> = self
+            .locals
+            .iter()
+            .map(|(i, id)| PackRow {
+                key: PackKey::Local(i.path.clone()),
+                name: i.name.clone(),
+                kind: format!("{} {}", i.loader.kind.label(), i.minecraft),
+                hub: find(id).map(|(p, _)| p.clone()),
+                online: find(id).and_then(|(_, n)| *n),
+            })
+            .collect();
+        rows.extend(self.library.iter().filter(|(p, _)| !self.locals.iter().any(|(_, id)| id.as_ref() == Some(&p.id))).map(
+            |(p, n)| PackRow {
+                key: PackKey::Hub(p.id.clone()),
+                name: p.name.clone(),
+                kind: format!("{} {}", p.loader.kind.label(), p.minecraft),
+                hub: Some(p.clone()),
+                online: *n,
+            },
+        ));
+        self.packs = rows;
+        let sel = keep
+            .and_then(|k| self.packs.iter().position(|r| r.key == k))
+            .or(self.pack.selected())
+            .map(|i| i.min(self.packs.len().saturating_sub(1)));
+        self.pack.select(sel.or(Some(0)).filter(|_| !self.packs.is_empty()));
+    }
+
+    fn row(&self) -> Option<&PackRow> {
+        self.pack.selected().and_then(|i| self.packs.get(i))
     }
 
     fn path(&self) -> Option<PathBuf> {
-        self.pack.selected().and_then(|i| self.packs.get(i)).map(|p| p.path.clone())
+        match &self.row()?.key {
+            PackKey::Local(p) => Some(p.clone()),
+            PackKey::Hub(_) => None,
+        }
+    }
+
+    /// The selected pack is on the hub only.
+    fn hub_only(&self) -> bool {
+        self.row().is_some_and(|r| matches!(r.key, PackKey::Hub(_)))
+    }
+
+    /// Hub id of the selected pack when you own it, so you can create a server from it.
+    fn owned_pack(&self) -> Option<String> {
+        if let Some(p) = self.row()?.hub.as_ref().filter(|p| p.mine) {
+            return Some(p.id.clone());
+        }
+        let l = self.local.as_ref().filter(|l| l.cfg.role == Role::Owner)?;
+        l.cfg.remote.as_ref().map(|r| r.pack.clone())
     }
 
     /// Reads the selected pack again; `fresh` clears what is shown first (pack changed).
     fn load(&mut self, fresh: bool) {
-        let Some(path) = self.path() else { return };
+        let Some(row) = self.row() else { return };
+        let (key, hub) = (row.key.clone(), row.hub.clone());
         if fresh {
             self.local = None;
             self.remote = None;
             self.rows = Default::default();
         }
         let tx = self.tx.clone();
-        tokio::task::spawn_blocking(move || {
-            let r = read_local(path.clone());
-            let repo = r.as_ref().ok().filter(|l| l.cfg.remote.is_some()).map(|l| l.repo.clone());
-            tx.send(Msg::Local(path.clone(), Box::new(r))).ok();
-            if let Some(repo) = repo {
-                tokio::runtime::Handle::current().spawn(async move {
-                    tx.send(Msg::Remote(path, read_remote(repo).await)).ok();
+        match key {
+            PackKey::Local(path) => {
+                tokio::task::spawn_blocking(move || {
+                    let r = read_local(path.clone());
+                    let repo = r.as_ref().ok().filter(|l| l.cfg.remote.is_some()).map(|l| l.repo.clone());
+                    tx.send(Msg::Local(path.clone(), Box::new(r))).ok();
+                    if let Some(repo) = repo {
+                        tokio::runtime::Handle::current().spawn(async move {
+                            tx.send(Msg::Remote(PackKey::Local(path), read_repo_remote(repo).await)).ok();
+                        });
+                    }
                 });
             }
-        });
+            PackKey::Hub(id) => {
+                // Hub-only packs show just their servers.
+                self.tab = Tab::Servers;
+                let Some(p) = hub else { return };
+                tokio::spawn(async move {
+                    let s = Settings::load();
+                    let hub = if p.mine { Hub::authed(&s) } else { Ok(Hub::new(&s.hub_url(), None)) };
+                    let r = match hub {
+                        Ok(hub) => read_remote(hub, &p.id, &p.code, p.mine).await,
+                        Err(e) => Err(e),
+                    };
+                    tx.send(Msg::Remote(PackKey::Hub(id), r)).ok();
+                });
+            }
+        }
     }
 
     fn tick(&mut self) {
-        // Servers move during a deploy, so the Releases tab polls the hub.
+        // Servers move during a deploy, so the Releases and Servers views poll the hub.
         let live = matches!(self.tab, Tab::Releases | Tab::Servers);
-        if self.busy.is_none() && self.server.is_none() && live && self.local.as_ref().is_some_and(|l| l.cfg.remote.is_some()) {
+        let published = self.hub_only() || self.local.as_ref().is_some_and(|l| l.cfg.remote.is_some());
+        if self.busy.is_none() && self.server.is_none() && live && published {
             self.load(false);
+        }
+        // Online counts in the pack list, every 30s.
+        self.ticks += 1;
+        if self.ticks.is_multiple_of(10) && self.server.is_none() {
+            self.load_library();
         }
     }
 
@@ -381,7 +586,7 @@ impl App {
                 }
                 Err(e) => self.note = Some((false, format!("{e:#}"))),
             },
-            Msg::Remote(p, r) if Some(&p) == self.path().as_ref() => {
+            Msg::Remote(k, r) if Some(&k) == self.row().map(|r| &r.key) => {
                 if let Ok(r) = &r {
                     clamp(&mut self.rows[3], r.releases.len());
                     clamp(&mut self.rows[4], r.servers.len());
@@ -389,6 +594,16 @@ impl App {
                 self.remote = Some(r.map_err(|e| format!("{e:#}")));
             }
             Msg::Local(..) | Msg::Remote(..) => {}
+            Msg::Library(Ok(library)) => {
+                let before = self.row().map(|r| r.key.clone());
+                self.library = library;
+                self.merge();
+                if self.row().map(|r| &r.key) != before.as_ref() {
+                    self.load(true);
+                }
+            }
+            // Offline or the hub is down: local packs still work, the next refresh retries.
+            Msg::Library(Err(_)) => {}
             Msg::Progress(p) => {
                 if let Some(b) = &mut self.busy {
                     b.1 = Some(p);
@@ -455,10 +670,20 @@ impl App {
             KeyCode::Esc if !self.inside => self.quit = true,
             KeyCode::Esc | KeyCode::Left | KeyCode::Char('h') => self.inside = false,
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') if !self.inside => self.inside = true,
+            // Hub-only packs have just the servers view.
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('1'..='5') if self.hub_only() => {}
             KeyCode::Tab => self.tab = TABS[(self.tab as usize + 1) % TABS.len()],
             KeyCode::BackTab => self.tab = TABS[(self.tab as usize + TABS.len() - 1) % TABS.len()],
             KeyCode::Char(c @ '1'..='5') => self.tab = TABS[c as usize - '1' as usize],
             KeyCode::Char('R') => self.reload_packs(),
+            KeyCode::Char('i') => {
+                let value = std::env::current_dir().map(|d| d.display().to_string()).unwrap_or_default();
+                self.modal = Some(Modal::Input { ask: Ask::Import, value });
+            }
+            KeyCode::Char('c') => match self.owned_pack() {
+                Some(id) => self.suspend = Some(Suspend::Install(id)),
+                None => self.note = Some((false, "Only packs you own and published can run servers".into())),
+            },
             KeyCode::Char(c) => self.action(c),
             KeyCode::Enter if matches!(self.tab, Tab::Branches | Tab::Servers) => self.action('\n'),
             _ => {}
@@ -466,13 +691,14 @@ impl App {
     }
 
     fn list_len(&self) -> usize {
-        let Some(l) = &self.local else { return 0 };
+        let remote = self.remote.as_ref().and_then(|r| r.as_ref().ok());
+        let local = self.local.as_ref();
         match self.tab {
-            Tab::Changes => l.status.diff.files.len(),
-            Tab::History => l.log.len(),
-            Tab::Branches => l.branches.len(),
-            Tab::Releases => self.remote.as_ref().and_then(|r| r.as_ref().ok()).map_or(0, |r| r.releases.len()),
-            Tab::Servers => self.remote.as_ref().and_then(|r| r.as_ref().ok()).map_or(0, |r| r.servers.len()),
+            Tab::Changes => local.map_or(0, |l| l.status.diff.files.len()),
+            Tab::History => local.map_or(0, |l| l.log.len()),
+            Tab::Branches => local.map_or(0, |l| l.branches.len()),
+            Tab::Releases => remote.map_or(0, |r| r.releases.len()),
+            Tab::Servers => remote.map_or(0, |r| r.servers.len()),
         }
     }
 
@@ -482,6 +708,9 @@ impl App {
 
     /// Letter key actions for the selected pack.
     fn action(&mut self, c: char) {
+        if (c, self.tab) == ('\n', Tab::Servers) {
+            return self.open_selected_server();
+        }
         let Some(l) = &self.local else { return };
         let repo = l.repo.clone();
         let published = l.cfg.remote.is_some();
@@ -514,23 +743,6 @@ impl App {
                 let everyone = (owner && published).then_some(true);
                 self.modal = Some(Modal::Confirm { sure: Sure::Rollback { id: e.id.clone() }, text, everyone });
             }
-            ('\n', Tab::Servers) => {
-                let Some(Ok(r)) = &self.remote else { return };
-                let Some(row) = self.selected(&r.servers).map(|i| &r.servers[i]) else { return };
-                let Some(server) = row.owned.clone() else {
-                    self.note = Some((false, "Only the pack's owner can manage its servers".into()));
-                    return;
-                };
-                let version = server
-                    .current_commit
-                    .as_deref()
-                    .map(|c| release_of(&self.remote, c).map_or_else(|| short(c).to_string(), str::to_string))
-                    .unwrap_or_default();
-                match hub_for(&repo) {
-                    Ok(hub) => self.open_server(hub, server, version),
-                    Err(e) => self.note = Some((false, format!("{e:#}"))),
-                }
-            }
             ('n', Tab::Branches) => self.modal = Some(Modal::Input { ask: Ask::Branch, value: String::new() }),
             ('\n', Tab::Branches) => {
                 let Some(b) = self.selected(&l.branches).map(|i| l.branches[i].name.clone()) else { return };
@@ -552,6 +764,29 @@ impl App {
         }
     }
 
+    /// Opens the console and backups of the server selected in the Servers view.
+    fn open_selected_server(&mut self) {
+        let Some(Ok(r)) = &self.remote else { return };
+        let Some(row) = self.selected(&r.servers).map(|i| &r.servers[i]) else { return };
+        let Some(server) = row.owned.clone() else {
+            self.note = Some((false, "Only the pack's owner can manage its servers".into()));
+            return;
+        };
+        let version = server
+            .current_commit
+            .as_deref()
+            .map(|c| release_of(&self.remote, c).map_or_else(|| short(c).to_string(), str::to_string))
+            .unwrap_or_default();
+        let hub = match &self.local {
+            Some(l) => hub_for(&l.repo),
+            None => Hub::authed(&Settings::load()),
+        };
+        match hub {
+            Ok(hub) => self.open_server(hub, server, version),
+            Err(e) => self.note = Some((false, format!("{e:#}"))),
+        }
+    }
+
     fn modal_key(&mut self, k: KeyEvent) {
         let Some(modal) = self.modal.take() else { return };
         // Server confirmations need no pack (`beacon server console` has none).
@@ -563,11 +798,16 @@ impl App {
             }
             return;
         }
-        let Some(repo) = self.local.as_ref().map(|l| l.repo.clone()) else { return };
+        // Importing needs no pack; everything else acts on the selected one.
+        let repo = self.local.as_ref().map(|l| l.repo.clone());
         match modal {
             Modal::Input { ask, mut value } => match k.code {
                 KeyCode::Esc => {}
-                KeyCode::Enter if !value.trim().is_empty() => self.submit(ask, value.trim().to_string(), repo),
+                KeyCode::Enter if !value.trim().is_empty() => match (ask, repo) {
+                    (Ask::Import, _) => self.suspend = Some(Suspend::Import(server_dir(value.trim()))),
+                    (ask, Some(repo)) => self.submit(ask, value.trim().to_string(), repo),
+                    (_, None) => {}
+                },
                 KeyCode::Backspace => {
                     value.pop();
                     self.modal = Some(Modal::Input { ask, value });
@@ -579,7 +819,11 @@ impl App {
                 _ => self.modal = Some(Modal::Input { ask, value }),
             },
             Modal::Confirm { sure, text, everyone } => match k.code {
-                KeyCode::Char('y') | KeyCode::Enter => self.confirm(sure, everyone.unwrap_or(false), repo),
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    if let Some(repo) = repo {
+                        self.confirm(sure, everyone.unwrap_or(false), repo)
+                    }
+                }
                 KeyCode::Char(' ') | KeyCode::Char('a') if everyone.is_some() => {
                     self.modal = Some(Modal::Confirm { sure, text, everyone: everyone.map(|e| !e) })
                 }
@@ -605,6 +849,8 @@ impl App {
                 let code = repo.config()?.remote.map(|r| r.code).unwrap_or_default();
                 Ok(format!("Published {}. Share code {code}", rel.name))
             }),
+            // Handled in `modal_key`: it runs suspended and needs no pack.
+            Ask::Import => {}
         }
     }
 
@@ -660,10 +906,11 @@ impl App {
             .packs
             .iter()
             .map(|p| {
-                ListItem::new(vec![
-                    Line::from(p.name.clone()),
-                    Line::from(format!("{} {}", p.loader.kind.label(), p.minecraft)).dark_gray(),
-                ])
+                let mut info = vec![p.kind.clone().dark_gray()];
+                if let Some(n @ 1..) = p.online {
+                    info.push(format!("  ● {n} online").green());
+                }
+                ListItem::new(vec![Line::from(p.name.clone()), Line::from(info)])
             })
             .collect();
         let empty = items.is_empty();
@@ -678,8 +925,9 @@ impl App {
             .highlight_style(highlight(!self.inside));
         f.render_stateful_widget(list, area, &mut self.pack);
         if empty {
-            let hint = Paragraph::new("No packs yet.\nbeacon new, import or join\ncreates one.").dark_gray();
-            f.render_widget(hint, Rect { y: area.y + 2, height: 3, ..area }.inner(ratatui::layout::Margin::new(1, 0)));
+            let hint =
+                Paragraph::new("No packs yet.\ni imports a server.\nbeacon new, import or join\ncreates a pack.").dark_gray();
+            f.render_widget(hint, Rect { y: area.y + 2, height: 4, ..area }.inner(ratatui::layout::Margin::new(1, 0)));
         }
     }
 
@@ -687,6 +935,9 @@ impl App {
         let area = area.inner(ratatui::layout::Margin::new(1, 0));
         let [title, tabs, list] =
             Layout::vertical([Constraint::Length(2), Constraint::Length(2), Constraint::Min(1)]).areas(area);
+        if let Some(p) = self.row().filter(|r| matches!(r.key, PackKey::Hub(_))).and_then(|r| r.hub.clone()) {
+            return self.draw_hub_pack(f, &p, title, Rect { height: tabs.height + list.height, ..tabs });
+        }
         let Some(l) = &self.local else {
             f.render_widget(Paragraph::new(if self.packs.is_empty() { "" } else { "Loading..." }).dark_gray(), title);
             return;
@@ -782,6 +1033,22 @@ impl App {
         f.render_stateful_widget(list_widget, list, &mut self.rows[self.tab as usize]);
     }
 
+    /// A pack in your library with no copy on this machine: who owns it and its servers.
+    fn draw_hub_pack(&mut self, f: &mut Frame, p: &Pack, title: Rect, body: Rect) {
+        let owner = if p.mine { "yours".to_string() } else { format!("by {}", p.owner) };
+        let latest = p.latest.as_ref().map_or("no releases", |r| r.name.as_str());
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![p.name.clone().bold(), format!("  code {} · {owner}", p.code).dark_gray()]),
+                Line::from(format!("{} {} · {latest} · not on this machine", p.loader.kind.label(), p.minecraft)).dark_gray(),
+            ]),
+            title,
+        );
+        let [head, list] = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).areas(body);
+        f.render_widget(Line::from("Servers".bold()), head);
+        self.draw_servers(f, list);
+    }
+
     fn draw_releases(&mut self, f: &mut Frame, area: Rect) {
         let r = match &self.remote {
             None if self.local.as_ref().is_some_and(|l| l.cfg.remote.is_none()) => {
@@ -844,7 +1111,10 @@ impl App {
             Some(Ok(r)) => r,
         };
         if r.servers.is_empty() {
-            let text = "No servers yet. On the server machine run:\n  beacon login\n  beacon server install";
+            let text = match self.owned_pack() {
+                Some(_) => "No servers yet. Press c to create one on this machine, or i to import one.",
+                None => "No servers yet.",
+            };
             return f.render_widget(Paragraph::new(text).dark_gray(), area);
         }
         let name_of = |c: &Option<String>| {
@@ -897,22 +1167,33 @@ impl App {
             return f.render_widget(Line::from(spans), keys);
         }
         let role = self.local.as_ref().map(|l| l.cfg.role);
+        let owned = self.owned_pack().is_some();
         let mut hints: Vec<(&str, &str)> = if self.inside { vec![("esc", "packs")] } else { vec![("enter", "open")] };
-        hints.extend([("tab", "view")]);
-        match self.tab {
-            Tab::Changes => hints.extend([("s", "save"), ("x", "discard")]),
-            Tab::History if role != Some(Role::Subscriber) => hints.extend([("r", "roll back")]),
-            Tab::History => {}
-            Tab::Branches => hints.extend([("enter", "switch"), ("n", "new")]),
-            Tab::Releases if role == Some(Role::Owner) => hints.extend([("p", "publish"), ("d", "deploy")]),
-            Tab::Releases => {}
-            Tab::Servers if role == Some(Role::Owner) => hints.extend([("enter", "console and backups")]),
-            Tab::Servers => {}
+        if self.hub_only() {
+            if owned && self.inside {
+                hints.push(("enter", "console and backups"));
+            }
+        } else {
+            hints.push(("tab", "view"));
+            match self.tab {
+                Tab::Changes => hints.extend([("s", "save"), ("x", "discard")]),
+                Tab::History if role != Some(Role::Subscriber) => hints.extend([("r", "roll back")]),
+                Tab::History => {}
+                Tab::Branches => hints.extend([("enter", "switch"), ("n", "new")]),
+                Tab::Releases if role == Some(Role::Owner) => hints.extend([("p", "publish"), ("d", "deploy")]),
+                Tab::Releases => {}
+                Tab::Servers if role == Some(Role::Owner) => hints.extend([("enter", "console and backups")]),
+                Tab::Servers => {}
+            }
+            if role == Some(Role::Subscriber) {
+                hints.push(("u", "update"));
+            }
+            hints.push(("P", "play"));
         }
-        if role == Some(Role::Subscriber) {
-            hints.push(("u", "update"));
+        if owned {
+            hints.push(("c", "create server"));
         }
-        hints.extend([("P", "play"), ("q", "quit")]);
+        hints.extend([("i", "import server"), ("q", "quit")]);
         let spans: Vec<Span> =
             hints.into_iter().flat_map(|(k, v)| [format!(" {k} ").bold(), format!("{v}  ").dark_gray()]).collect();
         f.render_widget(Line::from(spans), keys);
@@ -928,11 +1209,13 @@ fn draw_modal(f: &mut Frame, m: &Modal) {
                 Ask::Save => " Save a version ",
                 Ask::Publish => " Publish a release ",
                 Ask::Branch => " New branch ",
+                Ask::Import => " Import a server ",
             };
             let hint = match ask {
                 Ask::Save => "What changed?",
                 Ask::Publish => "Release name, e.g. 1.4",
                 Ask::Branch => "Branch name",
+                Ask::Import => "Server folder (the one with server.properties)",
             };
             let lines = vec![
                 Line::from(hint).dark_gray(),
@@ -977,6 +1260,16 @@ fn mark(k: ChangeKind) -> Span<'static> {
         ChangeKind::Enabled => "● ".green(),
         ChangeKind::Disabled => "○ ".dark_gray(),
     }
+}
+
+/// A typed server folder as an absolute path (`~` expanded): it ends up in service files.
+fn server_dir(typed: &str) -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dir = match (typed.strip_prefix("~/").or((typed == "~").then_some("")), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => PathBuf::from(typed),
+    };
+    dir.canonicalize().unwrap_or(dir)
 }
 
 /// Row highlight: a gray bar where keys go, bold elsewhere so the choice stays visible.
