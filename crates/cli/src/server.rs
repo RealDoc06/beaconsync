@@ -603,7 +603,8 @@ fn writable(dir: &Path) -> bool {
 }
 
 /// Copies a whole server (worlds included) into `to`, which must be new or empty, and returns
-/// its absolute path. Symlinks are recreated, not followed.
+/// its absolute path. Symlinks are recreated, not followed. Files this user can't read (a server
+/// run by Docker or another account) are copied with sudo, then handed to this user.
 fn copy_server(from: &Path, to: &Path) -> Result<PathBuf> {
     let from = &from.canonicalize()?;
     if std::path::absolute(to)?.starts_with(from) {
@@ -614,6 +615,20 @@ fn copy_server(from: &Path, to: &Path) -> Result<PathBuf> {
     }
     fs::create_dir_all(to).with_context(|| format!("can't create {}", to.display()))?;
     let to = to.canonicalize()?;
+    ui::info(format!("Copying the server to {}", to.display()));
+    let files = match copy_tree(from, &to) {
+        Err(e) if !is_root() && permission_denied(&e) => {
+            ui::warn(format!("{} can't read every file in {}; copying with sudo", current_user(), from.display()));
+            sudo_copy(from, &to)?
+        }
+        r => r?,
+    };
+    ui::ok(format!("Copied {files} files; the original in {} is untouched", from.display()));
+    Ok(to)
+}
+
+/// `copy_server`'s copy as this user, with a progress bar. Returns how many files it copied.
+fn copy_tree(from: &Path, to: &Path) -> Result<usize> {
     let entries: Vec<_> = walkdir::WalkDir::new(from)
         .min_depth(1)
         .into_iter()
@@ -621,10 +636,9 @@ fn copy_server(from: &Path, to: &Path) -> Result<PathBuf> {
         .collect::<Result<_, _>>()
         .with_context(|| format!("can't read {}", from.display()))?;
     let files = entries.iter().filter(|e| e.file_type().is_file()).count();
-    ui::info(format!("Copying the server to {}", to.display()));
     let bar = Bar::new();
     let mut done = 0;
-    for e in &entries {
+    let copied = entries.iter().try_for_each(|e| -> Result<()> {
         let dest = to.join(e.path().strip_prefix(from)?);
         let t = e.file_type();
         if t.is_dir() {
@@ -637,10 +651,32 @@ fn copy_server(from: &Path, to: &Path) -> Result<PathBuf> {
             done += 1;
             bar.update(Progress { done, total: files, label: e.file_name().to_string_lossy().into_owned() });
         }
-    }
+        Ok(())
+    });
     bar.done();
-    ui::ok(format!("Copied {files} files; the original in {} is untouched", from.display()));
-    Ok(to)
+    copied.map(|()| files)
+}
+
+/// `copy_server`'s fallback: `cp -a` as root over whatever `copy_tree` got done, then the copy
+/// is given to this user (owner, writable) and the original's `.beacon` dropped.
+fn sudo_copy(from: &Path, to: &Path) -> Result<usize> {
+    let (uid, gid) = uid_gid().context("copying with sudo needs a Unix system")?;
+    let src = format!("{}/.", from.display());
+    let dest = to.to_string_lossy();
+    run_cmd("sudo", &["cp", "-a", &src, &dest], to)?;
+    run_cmd("sudo", &["chown", "-R", &format!("{uid}:{gid}"), &dest], to)?;
+    // `cp -a` keeps the original's modes; the server still has to write to its copy.
+    run_cmd("sudo", &["chmod", "-R", "u+rwX", &dest], to)?;
+    let beacon = to.join(".beacon");
+    if beacon.exists() {
+        fs::remove_dir_all(&beacon)?;
+    }
+    Ok(walkdir::WalkDir::new(to).into_iter().flatten().filter(|e| e.file_type().is_file()).count())
+}
+
+/// True when `e` comes from the OS refusing access.
+fn permission_denied(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<std::io::Error>().is_some_and(|io| io.kind() == std::io::ErrorKind::PermissionDenied))
 }
 
 fn run_cmd(program: &str, args: &[&str], dir: &Path) -> Result<()> {
