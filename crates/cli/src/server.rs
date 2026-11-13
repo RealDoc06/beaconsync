@@ -9,7 +9,7 @@ use crate::{
     backups,
     ui::{self, Bar},
 };
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use beacon_core::{
     api::{AgentConsole, AgentReport, AgentTarget, NewServer, Release, Server, ServerAction, ServerMode},
     fetch::{Fetcher, Progress},
@@ -493,14 +493,25 @@ pub(crate) async fn import(
     }
     let settings = Settings::load();
     let hub = Hub::authed(&settings).context("run `beacon login` first")?;
-    let detected = import::detect_server(&dir).map_err(|e| anyhow!("{e:#}; pass --mc and --loader"));
-    let minecraft = match mc {
-        Some(v) => v,
-        None => detected.as_ref().map_err(|e| anyhow!("{e:#}"))?.0.clone(),
+    // What detection can't tell (and --mc / --loader don't say) is asked for.
+    let detected = import::detect_server(&dir);
+    if let Err(e) = &detected
+        && (mc.is_none() || loader.is_none())
+    {
+        ui::warn(format!("{e:#}"));
+    }
+    let minecraft = match (mc, &detected) {
+        (Some(v), _) => v,
+        (None, Ok((v, _))) => v.clone(),
+        (None, Err(_)) => ui::input("Minecraft version", None)?,
     };
-    let loader = match loader {
-        Some(l) => crate::pack::parse_loader(&l, &minecraft).await?,
-        None => detected.as_ref().map_err(|e| anyhow!("{e:#}"))?.1.clone(),
+    let loader = match (loader, &detected) {
+        (Some(l), _) => crate::pack::parse_loader(&l, &minecraft).await?,
+        (None, Ok((_, l))) => l.clone(),
+        (None, Err(_)) => {
+            let l = ui::input("Loader: fabric, quilt, forge, neoforge or vanilla (optionally fabric@0.16.9)", None)?;
+            crate::pack::parse_loader(&l, &minecraft).await?
+        }
     };
     let mods = fs::read_dir(dir.join("mods"))
         .map(|r| r.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "jar")).count())

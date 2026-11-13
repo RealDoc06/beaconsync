@@ -311,6 +311,12 @@ async fn read_repo_remote(repo: Repo) -> Result<Remote> {
     read_remote(hub, &remote.pack, &remote.code, owner).await
 }
 
+/// Fails hub reads that take longer than the 3s refresh would allow to pile up, so a stalled
+/// hub can't collect requests.
+async fn deadline<T>(read: impl Future<Output = Result<T>>) -> Result<T> {
+    tokio::time::timeout(Duration::from_secs(10), read).await.context("the hub did not answer in time")?
+}
+
 /// Your hub library, each pack with its online server count (`None` when that lookup failed).
 /// Empty when not signed in.
 async fn read_library() -> Result<Vec<(Pack, Option<usize>)>> {
@@ -441,7 +447,7 @@ impl App {
 
     fn load_library(&self) {
         let tx = self.tx.clone();
-        tokio::spawn(async move { tx.send(Msg::Library(read_library().await)).ok() });
+        tokio::spawn(async move { tx.send(Msg::Library(deadline(read_library()).await)).ok() });
     }
 
     /// Rebuilds `packs` from `locals` and `library`, keeping the selected pack selected.
@@ -519,7 +525,7 @@ impl App {
                     tx.send(Msg::Local(path.clone(), Box::new(r))).ok();
                     if let Some(repo) = repo {
                         tokio::runtime::Handle::current().spawn(async move {
-                            tx.send(Msg::Remote(PackKey::Local(path), read_repo_remote(repo).await)).ok();
+                            tx.send(Msg::Remote(PackKey::Local(path), deadline(read_repo_remote(repo)).await)).ok();
                         });
                     }
                 });
@@ -532,7 +538,7 @@ impl App {
                     let s = Settings::load();
                     let hub = if p.mine { Hub::authed(&s) } else { Ok(Hub::new(&s.hub_url(), None)) };
                     let r = match hub {
-                        Ok(hub) => read_remote(hub, &p.id, &p.code, p.mine).await,
+                        Ok(hub) => deadline(read_remote(hub, &p.id, &p.code, p.mine)).await,
                         Err(e) => Err(e),
                     };
                     tx.send(Msg::Remote(PackKey::Hub(id), r)).ok();
