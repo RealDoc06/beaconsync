@@ -108,12 +108,12 @@ pub async fn import(file: Option<PathBuf>, modrinth: Option<String>) -> Result<(
     Ok(())
 }
 
-pub async fn join(code: &str, fork: bool) -> Result<()> {
+pub async fn join(code: &str, how: ops::JoinAs) -> Result<()> {
     let s = Settings::load();
     let (hub_url, code) = hub::parse_link(code).unwrap_or_else(|| (s.hub_url(), hub::parse_code(code)));
     let hub = Hub::new(&hub_url, s.token.clone());
     let bar = Bar::new();
-    let repo = ops::join(&hub, &code, &s.instances_root(), fork, &author(), &|p| bar.update(p)).await?;
+    let repo = ops::join(&hub, &code, &s.instances_root(), how, &author(), &|p| bar.update(p)).await?;
     bar.done();
     ui::ok(format!("{} is ready at {}", repo.config()?.name, repo.root.display()));
     Ok(())
@@ -302,7 +302,17 @@ pub async fn add(dir: &Path, project: &str) -> Result<()> {
             _ => None,
         })
         .collect();
-    let files = modrinth::resolve_install(project, false, &tree.minecraft, tree.loader.kind, &installed).await?;
+    let files = match modrinth::resolve_install(project, false, &tree.minecraft, tree.loader.kind, &installed).await {
+        Err(e) if modrinth::is_not_found(&e) => {
+            let hits = modrinth::suggest(project, &tree.minecraft, tree.loader.kind).await;
+            let names: Vec<String> = hits.iter().map(|h| format!("{} ({})", h.slug, h.title)).collect();
+            match names.as_slice() {
+                [] => bail!("Modrinth has no project \"{project}\""),
+                _ => bail!("Modrinth has no project \"{project}\". Did you mean {}?", names.join(", ")),
+            }
+        }
+        r => r?,
+    };
     let game = repo.game_dir();
     for (path, entry) in &files {
         fetch::download(entry.source.as_ref().map(|s| s.url()).unwrap_or_default(), &entry.hash, &game.join(path)).await?;

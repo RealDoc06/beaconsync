@@ -71,6 +71,9 @@ enum Cmd {
         code: String,
         #[arg(long)]
         fork: bool,
+        /// Your own pack on another machine: save, publish and deploy it from here.
+        #[arg(long, conflicts_with = "fork")]
+        edit: bool,
     },
     /// Show unsaved changes.
     Status,
@@ -204,7 +207,20 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::New { name, mc, loader } => pack::new(&name, &mc, &loader).await,
         Cmd::Init => pack::init(&dir).await,
         Cmd::Import { file, modrinth } => pack::import(file, modrinth).await,
-        Cmd::Join { code, fork } => pack::join(&code, fork).await,
+        Cmd::Join { code, fork, edit } => {
+            use beacon_core::ops::JoinAs;
+            pack::join(
+                &code,
+                if edit {
+                    JoinAs::Edit
+                } else if fork {
+                    JoinAs::Fork
+                } else {
+                    JoinAs::Play
+                },
+            )
+            .await
+        }
         Cmd::Status => pack::status(&dir),
         Cmd::Save { message } => pack::save(&dir, &message).await,
         Cmd::Log { limit } => pack::log(&dir, limit),

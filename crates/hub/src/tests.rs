@@ -301,3 +301,43 @@ async fn update_is_only_relayed_to_agents_that_report_a_version() {
     agent.agent_report(&report(None)).await.unwrap();
     assert!(owner.server_action(&sid, &update).await.is_err());
 }
+
+#[tokio::test]
+async fn owners_edit_their_pack_on_another_machine_and_roll_back_by_release_name() {
+    use beacon_core::{
+        fetch::no_progress,
+        instance,
+        ops::{self, JoinAs},
+        repo::{self, Role},
+    };
+    let (tmp, base) = start().await;
+    let anon = Hub::new(&base, None);
+    let register = |name: &str| Credentials { username: name.into(), password: "longpassword".into() };
+    let hub = Hub::new(&base, Some(anon.register(&register("doc")).await.unwrap().token));
+    let eve = Hub::new(&base, Some(anon.register(&register("eve")).await.unwrap().token));
+
+    // Vanilla, so joining doesn't fetch the companion mod.
+    let dir = tmp.path().join("desktop/pack");
+    instance::create(&dir, "Pack", "1.21.1", &Loader::default()).unwrap();
+    let repo = repo::Repo::init(&dir, repo::local_config("Pack")).unwrap();
+    let cfg = repo.game_dir().join("config/a.toml");
+    std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+    std::fs::write(&cfg, "1").unwrap();
+    repo.commit("v1", "doc").await.unwrap();
+    ops::publish(&repo, &hub, "1.0", "").await.unwrap();
+    std::fs::write(&cfg, "2").unwrap();
+    repo.commit("v2", "doc").await.unwrap();
+    ops::push(&repo, &hub, false).await.unwrap();
+    let code = repo.config().unwrap().remote.unwrap().code;
+
+    let laptop = tmp.path().join("laptop");
+    assert!(ops::join(&eve, &code, &laptop, JoinAs::Edit, "eve", &no_progress).await.is_err(), "only the owner edits");
+    let other = ops::join(&hub, &code, &laptop, JoinAs::Edit, "doc", &no_progress).await.unwrap();
+    let read = || std::fs::read_to_string(other.game_dir().join("config/a.toml")).unwrap();
+    assert_eq!(other.config().unwrap().role, Role::Owner);
+    assert_eq!(read(), "2", "starts from the newest saved version, not the last release");
+    assert_eq!(other.log("HEAD", 10).unwrap().len(), 2);
+
+    ops::rollback(&other, Some(&hub), "1.0", "doc", &no_progress).await.unwrap();
+    assert_eq!(read(), "1");
+}

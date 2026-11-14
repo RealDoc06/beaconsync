@@ -4,6 +4,8 @@
 export type LoaderKind = 'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'
 export type Side = 'both' | 'client' | 'server'
 export type Role = 'local' | 'owner' | 'subscriber'
+/** How a published pack is joined: follow its releases, copy it, or edit your own (`ops::JoinAs`). */
+export type JoinAs = 'play' | 'fork' | 'edit'
 
 export interface Loader {
   kind: LoaderKind

@@ -27,7 +27,7 @@ export interface Commands {
   minecraft_versions: Cmd<None, T.McVersion[]>
   loader_versions: Cmd<{ kind: T.LoaderKind; minecraft: string }, T.LoaderVersion[]>
   preview_code: Cmd<{ input: string }, T.JoinPreview>
-  join_pack: Cmd<{ input: string; fork: boolean }, string>
+  join_pack: Cmd<{ input: string; how: T.JoinAs }, string>
   // pack
   pack_info: Cmd<P, T.PackInfo>
   pack_files: Cmd<P, T.FileRow[]>

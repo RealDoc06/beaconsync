@@ -431,6 +431,13 @@ impl Repo {
         let files = self.tracked_files()?;
         let game = self.game_dir();
         let index: HashMap<String, IndexEntry> = self.read_json("index.json");
+        // A file written within the filesystem's timestamp granularity of this scan can change
+        // again without its mtime moving ("racy git"). Those entries aren't cached (mtime 0
+        // never matches), so the next scan hashes them again.
+        let racy_after = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+            .saturating_sub(std::time::Duration::from_secs(2).as_nanos());
         let hashed: Vec<(String, IndexEntry)> = files
             .par_iter()
             .map(|(rel, abs, meta)| {
@@ -441,6 +448,7 @@ impl Repo {
                     Some(i) if i.size == size && i.mtime == mtime => i.hash.clone(),
                     _ => sha512_file(abs)?,
                 };
+                let mtime = if mtime >= racy_after { 0 } else { mtime };
                 Ok((rel.clone(), IndexEntry { size, mtime, hash }))
             })
             .collect::<std::io::Result<_>>()?;

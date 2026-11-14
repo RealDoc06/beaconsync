@@ -4,7 +4,7 @@ import { Button, Input } from '../components/ui'
 import { call } from '../lib/api'
 import { loaderText, shortId } from '../lib/format'
 import { keys, useAction, useApp } from '../lib/store'
-import type { JoinPreview } from '../lib/types'
+import type { JoinAs, JoinPreview } from '../lib/types'
 
 export function JoinView({ initial }: { initial?: string }) {
   const go = useApp((s) => s.go)
@@ -14,7 +14,7 @@ export function JoinView({ initial }: { initial?: string }) {
     label: 'Looking up code',
     onSuccess: setPreview,
   })
-  const join = useAction((fork: boolean) => call('join_pack', { input, fork }), {
+  const join = useAction((how: JoinAs) => call('join_pack', { input, how }), {
     label: 'Downloading pack',
     invalidate: [keys.library],
     done: 'Pack ready',
@@ -73,10 +73,10 @@ export function JoinView({ initial }: { initial?: string }) {
               </dd>
             </dl>
             <div className="flex gap-2">
-              <Button variant="primary" disabled={!p.latest || join.isPending} onClick={() => join.mutate(false)}>
+              <Button variant="primary" disabled={!p.latest || join.isPending} onClick={() => join.mutate('play')}>
                 Play this pack
               </Button>
-              <Button disabled={!p.latest || join.isPending} onClick={() => join.mutate(true)}>
+              <Button disabled={!p.latest || join.isPending} onClick={() => join.mutate('fork')}>
                 Make my own copy
               </Button>
             </div>
