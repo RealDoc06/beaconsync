@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useState, type ReactNode } from 'react'
 import { PageHeader } from '../components/PageHeader'
+import { useUpdate } from '../components/UpdateButton'
 import { Button, Field, Input, Tag } from '../components/ui'
 import { call } from '../lib/api'
 import { keys, useAction } from '../lib/store'
@@ -61,6 +62,9 @@ function SettingsBody({ s }: { s: Settings }) {
           <ApproveDevice />
         </Section>
       )}
+      <Section title="Updates">
+        <Updates />
+      </Section>
       <Section title="CurseForge">
         <Field label="API key" hint="Needed for CurseForge modpacks. Get one at console.curseforge.com">
           <Input {...field('curseforge_key')} type="password" placeholder="Not set" />
@@ -89,6 +93,33 @@ function SettingsBody({ s }: { s: Settings }) {
         </Button>
       </div>
     </>
+  )
+}
+
+/** The running version and a manual check. The background one runs every 10 to 15 minutes;
+ * a newer version shows up as the button next to the logo either way. */
+function Updates() {
+  const status = useUpdate()
+  const qc = useQueryClient()
+  const check = useAction(() => call('update_check'), {
+    label: 'Checking for updates',
+    done: (v) => (v.offer ? `BeaconSync ${v.offer.version} is available` : 'BeaconSync is up to date'),
+    onSuccess: (v) => qc.setQueryData(keys.update, v),
+  })
+  return (
+    <div className="flex items-center gap-3">
+      <span>
+        BeaconSync <span className="font-medium">{status?.current}</span>
+      </span>
+      {status?.offer ? (
+        <Tag tone="accent">{status.offer.version} available</Tag>
+      ) : (
+        status?.latest && <Tag tone="ok">Up to date</Tag>
+      )}
+      <Button small className="ml-auto" disabled={check.isPending} onClick={() => check.mutate(undefined)}>
+        Check for updates
+      </Button>
+    </div>
   )
 }
 
