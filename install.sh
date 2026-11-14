@@ -27,12 +27,18 @@ esac
 [[ "$os" == apple-darwin && "$arch" == x86_64 && "$(sysctl -n sysctl.proc_translated 2>/dev/null)" == 1 ]] && arch="aarch64"
 asset="beacon-$arch-$os"
 
+# release.json (the API's view of the release, uploaded with it) comes from the download CDN,
+# which isn't held to the API's 60 anonymous calls per hour. Older releases fall back to the API.
 if [[ -z "$version" ]]; then
+  manifest="https://github.com/$REPO/releases/latest/download/release.json"
   api="https://api.github.com/repos/$REPO/releases/latest"
 else
+  manifest="https://github.com/$REPO/releases/download/v${version#v}/release.json"
   api="https://api.github.com/repos/$REPO/releases/tags/v${version#v}"
 fi
-release="$(curl -fsSL -H "Accept: application/vnd.github+json" "$api")" || die "no published release at $api"
+release="$(curl -fsSL "$manifest" 2>/dev/null)" ||
+  release="$(curl -fsSL -H "Accept: application/vnd.github+json" "$api")" ||
+  die "no published release at $api (GitHub allows 60 lookups per hour per IP; try again later)"
 tag="$(grep -m1 '"tag_name"' <<<"$release" | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')"
 # GitHub's sha256 for the asset: the first "digest" after its "name" line.
 digest="$(awk -v n="\"name\": \"$asset\"" 'index($0, n) { found = 1 } found && /"digest"/ { print; exit }' <<<"$release" |

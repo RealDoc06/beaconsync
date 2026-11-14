@@ -1,7 +1,13 @@
 //! BeaconSync's own releases on GitHub: what the newest version is and verified downloads of
 //! its files. The desktop app updates itself from here and tells servers to update `beacon`.
 //!
-//! `BEACON_RELEASES` overrides the releases API base (a mirror, a fork, or a local test feed).
+//! Each release carries `release.json`, the API's view of that release, served from GitHub's
+//! download CDN. Reading it there instead of the API avoids GitHub's limit of 60 anonymous API
+//! calls per hour per IP, which every app, CLI and server behind one home connection share.
+//! Releases without it (or a failed download) fall back to the API.
+//!
+//! `BEACON_RELEASES` overrides the releases API base (a mirror, a fork, or a local test feed)
+//! and skips the manifest.
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
@@ -13,6 +19,9 @@ use std::{
 };
 
 const API: &str = "https://api.github.com/repos/RealDoc06/beaconsync/releases";
+const DOWNLOADS: &str = "https://github.com/RealDoc06/beaconsync/releases";
+/// Release manifest uploaded by the release workflow.
+const MANIFEST: &str = "release.json";
 /// How long a download may go without receiving data.
 const STALL: Duration = Duration::from_secs(60);
 
@@ -76,14 +85,32 @@ async fn get(url: String) -> Result<Release> {
     Ok(resp.json().await?)
 }
 
+/// The release's manifest from the download CDN; `None` when it can't be had, so the caller
+/// asks the API instead.
+async fn manifest(path: &str) -> Option<Release> {
+    if std::env::var_os("BEACON_RELEASES").is_some() {
+        return None;
+    }
+    let url = format!("{DOWNLOADS}/{path}/{MANIFEST}");
+    let resp = crate::http().get(&url).timeout(Duration::from_secs(30)).send().await.ok()?.error_for_status().ok()?;
+    resp.json().await.inspect_err(|e| tracing::debug!("reading {url}: {e}")).ok()
+}
+
 /// The newest published release.
 pub async fn latest() -> Result<Release> {
-    get(format!("{}/latest", api())).await
+    match manifest("latest/download").await {
+        Some(r) => Ok(r),
+        None => get(format!("{}/latest", api())).await,
+    }
 }
 
 /// A release by version ("0.1.0-alpha.2") or tag ("v0.1.0-alpha.2").
 pub async fn by_version(version: &str) -> Result<Release> {
-    get(format!("{}/tags/v{}", api(), version.trim_start_matches('v'))).await
+    let tag = format!("v{}", version.trim_start_matches('v'));
+    match manifest(&format!("download/{tag}")).await {
+        Some(r) => Ok(r),
+        None => get(format!("{}/tags/{tag}", api())).await,
+    }
 }
 
 /// Downloads `asset` to `dest` through a temporary file next to it, checking its size and

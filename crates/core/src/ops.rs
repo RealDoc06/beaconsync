@@ -129,13 +129,21 @@ pub struct Rollback {
 /// Rolls the pack back to an older version for everyone. The old files are saved as a new
 /// version (history only moves forward, so players, servers and forks keep following), then,
 /// when `hub` is given and the pack is published, released and deployed to every server.
+/// `rev` is a version, branch or, for published packs, a release name like "v1.0".
 pub async fn rollback(repo: &Repo, hub: Option<&Hub>, rev: &str, author: &str, on: OnProgress<'_>) -> Result<Rollback> {
-    let target = repo.resolve(rev)?;
-    let label = match (hub, repo.config()?.remote) {
-        (Some(hub), Some(remote)) => hub.releases(&remote.pack).await?.into_iter().find(|r| r.commit == target).map(|r| r.name),
-        _ => None,
-    }
-    .unwrap_or_else(|| repo.read_commit(&target).map(|c| c.message).unwrap_or_default());
+    let releases = match (hub, repo.config()?.remote) {
+        (Some(hub), Some(remote)) => hub.releases(&remote.pack).await?,
+        _ => vec![],
+    };
+    let target = match repo.resolve(rev) {
+        Ok(c) => c,
+        Err(e) => releases.iter().find(|r| r.name == rev).map(|r| r.commit.clone()).ok_or(e)?,
+    };
+    let label = releases
+        .into_iter()
+        .find(|r| r.commit == target)
+        .map(|r| r.name)
+        .unwrap_or_else(|| repo.read_commit(&target).map(|c| c.message).unwrap_or_default());
     repo.restore(&target, on).await?;
     let commit = if repo.is_dirty()? {
         repo.commit(&format!("Rolled back to \"{label}\""), author).await?
