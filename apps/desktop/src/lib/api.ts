@@ -81,6 +81,7 @@ export interface Commands {
   export_server_pack: Cmd<P<{ out: string }>, null>
   // updates
   update_status: Cmd<None, T.UpdateView>
+  update_check: Cmd<None, T.UpdateView>
   update_download: Cmd<None, null>
   update_install: Cmd<None, null>
 }

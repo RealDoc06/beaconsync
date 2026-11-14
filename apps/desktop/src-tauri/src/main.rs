@@ -89,6 +89,7 @@ fn main() {
             hub::server_action,
             hub::export_server_pack,
             updates::update_status,
+            updates::update_check,
             updates::update_download,
             updates::update_install,
         ])

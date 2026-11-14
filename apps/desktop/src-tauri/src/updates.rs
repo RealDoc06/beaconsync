@@ -1,7 +1,8 @@
 //! The app updating itself from BeaconSync's GitHub releases, the way Musicah does it: a
-//! background check finds a newer release, the first click downloads the installer for this
-//! kind of install (verified against GitHub's sha256), the second installs it and restarts.
-//! Installs it can't update in place (dev builds, unknown packages) only link to the release.
+//! background check (every 10 to 15 minutes, or `update_check` from Settings) finds a newer
+//! release, the first click downloads the installer for this kind of install (verified against
+//! GitHub's sha256), the second installs it and restarts. Installs it can't update in place (dev
+//! builds, unknown packages) only link to the release.
 //!
 //! The UI reads [`UpdateView`] with `update_status` and gets each change as an `update` event.
 
@@ -18,7 +19,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::util::Res;
 
-const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// Background checks run every 10 to 15 minutes. The spread keeps many open apps from hitting
+/// GitHub's API in lockstep (60 unauthenticated requests per hour per IP).
+const CHECK_MIN: Duration = Duration::from_secs(10 * 60);
+const CHECK_SPREAD: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -190,18 +194,37 @@ pub fn start(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
-            if let Ok(r) = release::latest().await {
-                let u = app.state::<Updates>();
-                let changed = u.inner.lock().unwrap().latest.as_ref().is_none_or(|old| old.tag_name != r.tag_name);
-                if changed {
-                    u.update(&app, |s| {
-                        *s = Inner { latest: Some(r), phase: Phase::Available, downloaded: 0, error: None, file: None };
-                    });
-                }
-            }
-            tokio::time::sleep(CHECK_EVERY).await;
+            check(&app).await.ok();
+            tokio::time::sleep(next_check()).await;
         }
     });
+}
+
+/// Fetches the newest release. A new tag replaces the offer; the same tag keeps any download in
+/// progress or ready to install.
+async fn check(app: &AppHandle) -> anyhow::Result<()> {
+    let r = release::latest().await?;
+    let u = app.state::<Updates>();
+    let changed = u.inner.lock().unwrap().latest.as_ref().is_none_or(|old| old.tag_name != r.tag_name);
+    if changed {
+        u.update(app, |s| {
+            *s = Inner { latest: Some(r), phase: Phase::Available, downloaded: 0, error: None, file: None };
+        });
+    }
+    Ok(())
+}
+
+/// A delay in `CHECK_MIN..CHECK_MIN + CHECK_SPREAD`, randomized by the clock's nanoseconds.
+fn next_check() -> Duration {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos();
+    CHECK_MIN + CHECK_SPREAD.mul_f64(f64::from(nanos) / 1e9)
+}
+
+/// Checks for a newer release now (the Settings button) and returns the result.
+#[tauri::command]
+pub async fn update_check(app: AppHandle) -> Res<UpdateView> {
+    check(&app).await?;
+    Ok(app.state::<Updates>().view())
 }
 
 #[tauri::command]
