@@ -41,6 +41,7 @@ export interface Commands {
   discard: Cmd<P<{ ids: string[] | null }>, null>
   ignore_files: Cmd<P<{ files: string[] }>, null>
   save_version: Cmd<P<{ message: string }>, string>
+  share_pack: Cmd<P, null>
   abort_merge: Cmd<P, null>
   history: Cmd<P, T.History>
   rollback: Cmd<P<{ id: string; publish: boolean }>, T.Rollback>

@@ -51,6 +51,7 @@ fn main() {
             pack::discard,
             pack::ignore_files,
             pack::save_version,
+            pack::share_pack,
             pack::abort_merge,
             pack::history,
             pack::rollback,

@@ -1,6 +1,6 @@
 //! Shared plumbing for commands: error type, progress events, blocking helper.
 
-use beacon_core::{fetch::Progress, repo::Repo, settings::Settings};
+use beacon_core::{fetch::Progress, hub::Hub, ops, repo::Repo, settings::Settings};
 use serde::{Serialize, Serializer};
 use std::path::Path;
 use tauri::{AppHandle, Emitter};
@@ -47,4 +47,14 @@ pub fn author(s: &Settings) -> String {
         .clone()
         .or_else(|| std::env::var("USER").or_else(|_| std::env::var("USERNAME")).ok())
         .unwrap_or_else(|| "me".into())
+}
+
+/// Shares a pack that was just tracked or saved on the hub (see [`ops::share`]), when signed
+/// in. Best effort: a failure is logged, retried on the next save, and never fails the action
+/// that ran first.
+pub async fn share(repo: &Repo) {
+    let Ok(hub) = Hub::authed(&Settings::load()) else { return };
+    if let Err(e) = ops::share(repo, &hub).await {
+        eprintln!("couldn't share {} on the hub: {e:#}", repo.root.display());
+    }
 }

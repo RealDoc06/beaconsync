@@ -303,6 +303,40 @@ async fn update_is_only_relayed_to_agents_that_report_a_version() {
 }
 
 #[tokio::test]
+async fn sharing_puts_saved_versions_on_the_hub_without_a_release() {
+    use beacon_core::{
+        fetch::no_progress,
+        instance, ops,
+        ops::JoinAs,
+        repo::{self, Role},
+    };
+    let (tmp, base) = start().await;
+    let anon = Hub::new(&base, None);
+    let register = |name: &str| Credentials { username: name.into(), password: "longpassword".into() };
+    let hub = Hub::new(&base, Some(anon.register(&register("doc")).await.unwrap().token));
+
+    let dir = tmp.path().join("pack");
+    instance::create(&dir, "Pack", "1.21.1", &Loader::default()).unwrap();
+    let repo = repo::Repo::init(&dir, repo::local_config("Pack")).unwrap();
+    let v1 = repo.commit("v1", "doc").await.unwrap();
+    let remote = ops::share(&repo, &hub).await.unwrap().unwrap();
+    assert_eq!(repo.config().unwrap().role, Role::Owner);
+    assert_eq!(hub.refs(&remote.pack).await.unwrap()["main"], v1);
+    assert!(hub.releases(&remote.pack).await.unwrap().is_empty(), "sharing doesn't publish a release");
+
+    std::fs::create_dir_all(repo.game_dir().join("config")).unwrap();
+    std::fs::write(repo.game_dir().join("config/a.toml"), "1").unwrap();
+    let v2 = repo.commit("v2", "doc").await.unwrap();
+    assert_eq!(ops::share(&repo, &hub).await.unwrap(), Some(remote.clone()), "same pack on later saves");
+    assert_eq!(hub.refs(&remote.pack).await.unwrap()["main"], v2);
+
+    // Players' copies follow the owner and are never shared as packs of their own.
+    ops::publish(&repo, &hub, "1.0", "").await.unwrap();
+    let player = ops::join(&hub, &remote.code, &tmp.path().join("player"), JoinAs::Play, "doc", &no_progress).await.unwrap();
+    assert_eq!(ops::share(&player, &hub).await.unwrap(), None);
+}
+
+#[tokio::test]
 async fn owners_edit_their_pack_on_another_machine_and_roll_back_by_release_name() {
     use beacon_core::{
         fetch::no_progress,
