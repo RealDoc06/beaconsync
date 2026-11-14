@@ -548,8 +548,10 @@ async fn switch(dir: &Path, query: &str) -> Result<()> {
 
     match cfg.mode {
         ServerMode::Docker => {
-            // Another Minecraft version can need another Java image, which only a new container gets.
-            let compose = srv::docker_compose(&cfg, beacon_core::meta::java_for(&pack.minecraft), uid_gid());
+            // Another Minecraft version can need another Java image, which only a new container
+            // gets. The release's own tree says which version it is.
+            let tree = fetch_tree(&hub, &ObjectStore::new(dir.join(".beacon/objects")), &latest.commit).await?;
+            let compose = srv::docker_compose(&cfg, beacon_core::meta::java_for(&tree.minecraft), uid_gid());
             let file = dir.join("docker-compose.yml");
             if fs::read_to_string(&file).ok().as_deref() != Some(compose.as_str()) {
                 fs::write(&file, compose)?;
