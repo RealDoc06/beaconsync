@@ -527,9 +527,16 @@ async fn switch(dir: &Path, query: &str) -> Result<()> {
 
     let created =
         hub.create_server(&pack.id, &NewServer { name: cfg.name.clone(), mode: cfg.mode, address: cfg.address.clone() }).await?;
+    let id = created.server.id.clone();
+    // Deploy before touching the config, so a failure leaves the server on its old pack.
+    let deploy = DeployRequest { release: latest.id.clone(), servers: DeployTargets::Some(vec![id.clone()]) };
+    if let Err(e) = hub.deploy(&pack.id, &deploy).await {
+        hub.delete_server(&pack.id, &id).await.ok();
+        return Err(e.context("couldn't deploy to it; the server still follows its old pack"));
+    }
     cfg.hub = Some(hub.base.clone());
     cfg.pack_code = Some(pack.code.clone());
-    cfg.server_id = Some(created.server.id.clone());
+    cfg.server_id = Some(id);
     cfg.token = Some(created.token);
     cfg.save(dir)?;
     if let (Some(old_pack), Some(old_id)) = old
@@ -537,12 +544,18 @@ async fn switch(dir: &Path, query: &str) -> Result<()> {
     {
         ui::warn(format!("couldn't remove it from {}: {e:#}", old_pack.name));
     }
-    hub.deploy(&pack.id, &DeployRequest { release: latest.id.clone(), servers: DeployTargets::Some(vec![created.server.id]) })
-        .await?;
-    ui::ok(format!("{} now follows {}; {} is deployed to it", cfg.name, pack.name, latest.name));
+    ui::ok(format!("{} now follows {}; {} is queued for it", cfg.name, pack.name, latest.name));
 
     match cfg.mode {
         ServerMode::Docker => {
+            // Another Minecraft version can need another Java image, which only a new container gets.
+            let compose = srv::docker_compose(&cfg, beacon_core::meta::java_for(&pack.minecraft), uid_gid());
+            let file = dir.join("docker-compose.yml");
+            if fs::read_to_string(&file).ok().as_deref() != Some(compose.as_str()) {
+                fs::write(&file, compose)?;
+                ui::info(format!("Recreating the container so it installs {}", latest.name));
+                return run_cmd("docker", &["compose", "up", "-d"], dir);
+            }
             let container = format!("beacon-{}", srv::slug(&cfg.name));
             ui::info(format!("Restarting {container} so it installs {}", latest.name));
             run_cmd("docker", &["restart", "-t", "120", &container], dir)
@@ -557,10 +570,13 @@ async fn switch(dir: &Path, query: &str) -> Result<()> {
             }
         }
         ServerMode::Plain if running_pid(dir).is_some() => {
-            ui::warn("Restart `beacon server run` so it installs the new pack");
+            ui::warn(format!("Restart `beacon server run` so it installs {}", latest.name));
             Ok(())
         }
-        ServerMode::Plain => Ok(()),
+        ServerMode::Plain => {
+            ui::info(format!("Run `beacon server update` to install {} before starting it", latest.name));
+            Ok(())
+        }
     }
 }
 

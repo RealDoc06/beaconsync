@@ -49,11 +49,22 @@ pub fn author(s: &Settings) -> String {
         .unwrap_or_else(|| "me".into())
 }
 
+/// The hub a pack lives on: the one it was shared to, else the one in settings. Fails when
+/// signed out.
+pub fn hub_for(repo: &Repo) -> anyhow::Result<Hub> {
+    let s = Settings::load();
+    let hub = Hub::authed(&s)?;
+    Ok(match repo.config()?.remote {
+        Some(r) => Hub::new(&r.hub, s.token),
+        None => hub,
+    })
+}
+
 /// Shares a pack that was just tracked or saved on the hub (see [`ops::share`]), when signed
 /// in. Best effort: a failure is logged, retried on the next save, and never fails the action
 /// that ran first.
 pub async fn share(repo: &Repo) {
-    let Ok(hub) = Hub::authed(&Settings::load()) else { return };
+    let Ok(hub) = hub_for(repo) else { return };
     if let Err(e) = ops::share(repo, &hub).await {
         eprintln!("couldn't share {} on the hub: {e:#}", repo.root.display());
     }

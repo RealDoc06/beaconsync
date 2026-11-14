@@ -30,7 +30,7 @@ pub enum ExportKind {
 /// Shares a pack that was just tracked or saved on the hub (see `ops::share`), when signed
 /// in. A failure only warns: the version is saved, and the next save tries again.
 async fn share(repo: &Repo) {
-    let Ok(hub) = Hub::authed(&Settings::load()) else { return };
+    let Ok(hub) = hub_for(repo) else { return };
     let had_remote = repo.config().is_ok_and(|c| c.remote.is_some());
     match ops::share(repo, &hub).await {
         Ok(Some(r)) if !had_remote => ui::info(format!("Shared on the hub · share code {}", r.code)),

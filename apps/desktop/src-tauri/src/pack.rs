@@ -239,8 +239,8 @@ pub async fn save_version(path: String, message: String) -> Res<String> {
 /// automatic share failed). Unlike the automatic one, errors reach the UI.
 #[tauri::command]
 pub async fn share_pack(path: String) -> Res<()> {
-    let hub = beacon_core::hub::Hub::authed(&Settings::load())?;
-    ops::share(&open(&path)?, &hub).await?.context("packs joined to play follow their owner's")?;
+    let repo = open(&path)?;
+    ops::share(&repo, &crate::util::hub_for(&repo)?).await?.context("packs joined to play follow their owner's")?;
     Ok(())
 }
 
