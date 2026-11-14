@@ -1,7 +1,7 @@
 //! Library level commands: listing instances, creating, importing and joining packs,
 //! version lists and modpack search.
 
-use crate::util::{Res, author, blocking, open, progress};
+use crate::util::{Res, author, blocking, open, progress, share};
 use anyhow::Context;
 use beacon_core::{
     api::PublicPack,
@@ -101,7 +101,7 @@ pub async fn instance_badges(path: String) -> Res<Badges> {
     Ok(Badges { unsaved, update })
 }
 
-/// Creates an empty instance, starts tracking it and saves the first version.
+/// Creates an empty instance, starts tracking it, saves the first version and shares it.
 #[tauri::command]
 pub async fn create_pack(name: String, minecraft: String, loader: Loader) -> Res<PathBuf> {
     let s = Settings::load();
@@ -109,6 +109,7 @@ pub async fn create_pack(name: String, minecraft: String, loader: Loader) -> Res
     instance::create(&dir, &name, &minecraft, &loader)?;
     let repo = Repo::init(&dir, repo::local_config(&name))?;
     repo.commit("First version", &author(&s)).await?;
+    share(&repo).await;
     Ok(dir)
 }
 
@@ -118,6 +119,7 @@ pub async fn import_file(app: AppHandle, file: PathBuf) -> Res<PathBuf> {
     let s = Settings::load();
     let on = progress(&app);
     let repo = import::import_file(&file, &s.instances_root(), s.curseforge_key.as_deref(), &author(&s), &on).await?;
+    share(&repo).await;
     Ok(repo.root)
 }
 
@@ -139,7 +141,9 @@ pub async fn adopt_instance(dir: PathBuf) -> Res<PathBuf> {
         blocking(move || copy_dir(&from, &to)).await?;
         dest
     };
-    Ok(import::adopt(&dir, &author(&s)).await?.root)
+    let repo = import::adopt(&dir, &author(&s)).await?;
+    share(&repo).await;
+    Ok(repo.root)
 }
 
 fn copy_dir(from: &Path, to: &Path) -> anyhow::Result<()> {
@@ -159,7 +163,9 @@ fn copy_dir(from: &Path, to: &Path) -> anyhow::Result<()> {
 pub async fn install_modrinth_pack(app: AppHandle, project: String) -> Res<PathBuf> {
     let s = Settings::load();
     let on = progress(&app);
-    Ok(import::install_modrinth_pack(&project, None, &s.instances_root(), &author(&s), &on).await?.root)
+    let repo = import::install_modrinth_pack(&project, None, &s.instances_root(), &author(&s), &on).await?;
+    share(&repo).await;
+    Ok(repo.root)
 }
 
 /// Downloads the newest file of a CurseForge modpack and imports it.
@@ -173,7 +179,9 @@ pub async fn install_curseforge_pack(app: AppHandle, id: u64) -> Res<PathBuf> {
     let on = progress(&app);
     let repo = import::import_curseforge(&tmp, &s.instances_root(), &cf, &author(&s), &on).await;
     std::fs::remove_file(&tmp).ok();
-    Ok(repo?.root)
+    let repo = repo?;
+    share(&repo).await;
+    Ok(repo.root)
 }
 
 #[tauri::command]

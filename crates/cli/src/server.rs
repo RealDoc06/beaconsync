@@ -11,7 +11,10 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use beacon_core::{
-    api::{AgentConsole, AgentReport, AgentTarget, NewServer, Release, Server, ServerAction, ServerMode},
+    api::{
+        AgentConsole, AgentReport, AgentTarget, DeployRequest, DeployTargets, NewServer, Pack, Release, Server, ServerAction,
+        ServerMode,
+    },
     fetch::{Fetcher, Progress},
     hash::short,
     hub::Hub,
@@ -74,6 +77,14 @@ pub enum ServerCmd {
         into: Option<PathBuf>,
         #[command(flatten)]
         setup: Setup,
+    },
+    /// Make this server follow another of your packs: it moves to that pack in the app and
+    /// installs its latest release. The world stays; files only the old pack had are removed.
+    Switch {
+        /// Pack share code, id or name.
+        pack: String,
+        /// Server folder, instead of the current one.
+        path: Option<PathBuf>,
     },
     /// Run the server: supervise Minecraft and apply deployments automatically.
     Run { path: Option<PathBuf> },
@@ -194,6 +205,7 @@ pub async fn run(cmd: ServerCmd, global_dir: Option<PathBuf>) -> Result<()> {
         ServerCmd::Import { path, pack_name, mc, loader, release, into, setup } => {
             import(pick(path)?, pack_name, mc, loader, &release, into, setup).await
         }
+        ServerCmd::Switch { pack, path } => switch(&pick(path)?, &pack).await,
         ServerCmd::Run { path } => supervise(pick(path)?).await,
         ServerCmd::Update { path } => update_once(&pick(path)?).await,
         ServerCmd::Status { path } => status(&pick(path)?).await,
@@ -456,10 +468,7 @@ pub(crate) async fn install(pack: Option<String>, path: Option<PathBuf>, s: Setu
         bail!("you have no published packs; publish one from the app first");
     }
     let pack = match &pack {
-        Some(q) => packs
-            .iter()
-            .find(|p| p.code.eq_ignore_ascii_case(q) || &p.id == q || p.name.eq_ignore_ascii_case(q))
-            .with_context(|| format!("no pack {q} in your library"))?,
+        Some(q) => find_pack(&packs, q)?,
         None => {
             let items: Vec<String> =
                 packs.iter().map(|p| format!("{}  {} {} · {}", p.name, p.loader.kind.label(), p.minecraft, p.code)).collect();
@@ -491,6 +500,86 @@ pub(crate) async fn install(pack: Option<String>, path: Option<PathBuf>, s: Setu
     bar.done();
     let launch = if s.no_start { Launch::OnBoot } else { Launch::Now };
     finish(&dir, cfg, &tree, &latest, launch, format!("Installed {} {} in {}", pack.name, latest.name, dir.display())).await
+}
+
+/// One of `packs` by share code, id or name.
+fn find_pack<'a>(packs: &'a [Pack], q: &str) -> Result<&'a Pack> {
+    packs
+        .iter()
+        .find(|p| p.code.eq_ignore_ascii_case(q) || p.id == q || p.name.eq_ignore_ascii_case(q))
+        .with_context(|| format!("no pack {q} in your library"))
+}
+
+/// Moves a server to another of your packs (`beacon server switch`): it is registered under
+/// that pack and dropped from the old one, then the new pack's latest release is deployed to
+/// it. The supervisor only reads its hub link at start, so a running service or container is
+/// restarted to pick the deploy up.
+async fn switch(dir: &Path, query: &str) -> Result<()> {
+    let mut cfg = ServerConfig::load(dir).context("not a server folder")?;
+    let hub = Hub::authed(&Settings::load()).context("run `beacon login` first")?;
+    let packs: Vec<_> = hub.library().await?.into_iter().filter(|p| p.mine).collect();
+    let pack = find_pack(&packs, query)?;
+    if cfg.pack_code.as_deref() == Some(pack.code.as_str()) {
+        bail!("{} already follows {}", cfg.name, pack.name);
+    }
+    let latest = pack.latest.clone().context("that pack has no release yet; publish one first")?;
+    let old = (cfg.pack_code.as_deref().and_then(|c| packs.iter().find(|p| p.code == c)), cfg.server_id.clone());
+
+    let created =
+        hub.create_server(&pack.id, &NewServer { name: cfg.name.clone(), mode: cfg.mode, address: cfg.address.clone() }).await?;
+    let id = created.server.id.clone();
+    // Deploy before touching the config, so a failure leaves the server on its old pack.
+    let deploy = DeployRequest { release: latest.id.clone(), servers: DeployTargets::Some(vec![id.clone()]) };
+    if let Err(e) = hub.deploy(&pack.id, &deploy).await {
+        hub.delete_server(&pack.id, &id).await.ok();
+        return Err(e.context("couldn't deploy to it; the server still follows its old pack"));
+    }
+    cfg.hub = Some(hub.base.clone());
+    cfg.pack_code = Some(pack.code.clone());
+    cfg.server_id = Some(id);
+    cfg.token = Some(created.token);
+    cfg.save(dir)?;
+    if let (Some(old_pack), Some(old_id)) = old
+        && let Err(e) = hub.delete_server(&old_pack.id, &old_id).await
+    {
+        ui::warn(format!("couldn't remove it from {}: {e:#}", old_pack.name));
+    }
+    ui::ok(format!("{} now follows {}; {} is queued for it", cfg.name, pack.name, latest.name));
+
+    match cfg.mode {
+        ServerMode::Docker => {
+            // Another Minecraft version can need another Java image, which only a new container
+            // gets. The release's own tree says which version it is.
+            let tree = fetch_tree(&hub, &ObjectStore::new(dir.join(".beacon/objects")), &latest.commit).await?;
+            let compose = srv::docker_compose(&cfg, beacon_core::meta::java_for(&tree.minecraft), uid_gid());
+            let file = dir.join("docker-compose.yml");
+            if fs::read_to_string(&file).ok().as_deref() != Some(compose.as_str()) {
+                fs::write(&file, compose)?;
+                ui::info(format!("Recreating the container so it installs {}", latest.name));
+                return run_cmd("docker", &["compose", "up", "-d"], dir);
+            }
+            let container = format!("beacon-{}", srv::slug(&cfg.name));
+            ui::info(format!("Restarting {container} so it installs {}", latest.name));
+            run_cmd("docker", &["restart", "-t", "120", &container], dir)
+        }
+        ServerMode::Service => {
+            let name = srv::service_name(&cfg);
+            ui::info(format!("Restarting {name} so it installs {}", latest.name));
+            if is_root() {
+                run_cmd("systemctl", &["restart", &name], dir)
+            } else {
+                run_cmd("sudo", &["systemctl", "restart", &name], dir)
+            }
+        }
+        ServerMode::Plain if running_pid(dir).is_some() => {
+            ui::warn(format!("Restart `beacon server run` so it installs {}", latest.name));
+            Ok(())
+        }
+        ServerMode::Plain => {
+            ui::info(format!("Run `beacon server update` to install {} before starting it", latest.name));
+            Ok(())
+        }
+    }
 }
 
 /// `server-port` from `server.properties`.

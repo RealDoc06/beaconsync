@@ -27,6 +27,18 @@ pub enum ExportKind {
     Server,
 }
 
+/// Shares a pack that was just tracked or saved on the hub (see `ops::share`), when signed
+/// in. A failure only warns: the version is saved, and the next save tries again.
+async fn share(repo: &Repo) {
+    let Ok(hub) = hub_for(repo) else { return };
+    let had_remote = repo.config().is_ok_and(|c| c.remote.is_some());
+    match ops::share(repo, &hub).await {
+        Ok(Some(r)) if !had_remote => ui::info(format!("Shared on the hub · share code {}", r.code)),
+        Ok(_) => {}
+        Err(e) => ui::warn(format!("not shared on the hub yet: {e:#}")),
+    }
+}
+
 pub(crate) fn author() -> String {
     Settings::load().username.or_else(|| std::env::var("USER").ok()).unwrap_or_else(|| "me".into())
 }
@@ -81,6 +93,7 @@ pub async fn new(name: &str, mc: &str, loader: &str) -> Result<()> {
     let repo = Repo::init(&dir, repo::local_config(name))?;
     repo.commit("New pack", &author()).await?;
     ui::ok(format!("Created {name} ({} {mc}) at {}", kind.label(), dir.display()));
+    share(&repo).await;
     Ok(())
 }
 
@@ -88,8 +101,9 @@ pub async fn init(dir: &Path) -> Result<()> {
     if !dir.join("mmc-pack.json").is_file() {
         bail!("{} is not a Prism/MultiMC instance (no mmc-pack.json)", dir.display());
     }
-    import::adopt(dir, &author()).await?;
+    let repo = import::adopt(dir, &author()).await?;
     ui::ok("Tracking this instance. Saved the first version.");
+    share(&repo).await;
     Ok(())
 }
 
@@ -105,6 +119,7 @@ pub async fn import(file: Option<PathBuf>, modrinth: Option<String>) -> Result<(
     };
     bar.done();
     ui::ok(format!("Imported {} to {}", repo.config()?.name, repo.root.display()));
+    share(&repo).await;
     Ok(())
 }
 
@@ -173,6 +188,7 @@ pub async fn save(dir: &Path, message: &str) -> Result<()> {
     let repo = find(dir)?;
     let id = repo.commit(message, &author()).await?;
     ui::ok(format!("Saved version {}", short(&id)));
+    share(&repo).await;
     Ok(())
 }
 

@@ -93,7 +93,8 @@ or the binary: `beacon-hub --data ./hub-data --addr 0.0.0.0:8787`. Put it behind
 ### 2. Make a pack in the app
 
 Install the desktop app from Releases, set the hub URL in Settings, create an account, then
-New pack → add mods → Save version → Publish. Share the code with friends.
+New pack → add mods → Save version → Publish. Share the code with friends. While you're signed in,
+every pack you track is on the hub with its own share code from the start, and each save is pushed there.
 
 ### 3. Put it on a server
 
@@ -132,6 +133,7 @@ beacon server cmd -s Survival whitelist add Steve
 beacon server backups -s Survival            # BeaconSync's and backup mods' (FTB Backups, Simple Backups...)
 beacon server backups -s Survival create | restore <id> | delete <id>
 beacon server stop | start | restart -s Survival
+beacon server switch "My Pack"     # on the server: follow another of your packs (world stays)
 beacon server rollback    # on the server, while it's stopped: back to the newest backup
 ```
 

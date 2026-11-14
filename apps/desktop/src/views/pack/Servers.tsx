@@ -9,12 +9,18 @@ import { askConfirm, keys, packKeys, useAction } from '../../lib/store'
 import type { PackInfo, Release, Server } from '../../lib/types'
 import { ServerPanel } from './ServerPanel'
 
+/** Shares a pack tracked before sharing was automatic (or whose automatic share failed). */
+export function useShare(path: string) {
+  return useAction(() => call('share_pack', { path }), { label: 'Sharing', invalidate: packKeys(path), done: 'Shared on the hub' })
+}
+
 export function ServersTab({ p }: { p: PackInfo }) {
   const path = p.path
   const published = !!p.config.remote
   const [publishing, setPublishing] = useState(false)
   const [deploying, setDeploying] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
+  const share = useShare(path)
 
   const servers = useQuery({
     queryKey: [...keys.pack(path), 'servers'],
@@ -85,9 +91,23 @@ export function ServersTab({ p }: { p: PackInfo }) {
       </div>
 
       <div className="border-t border-line">
-        {!published && <Empty>Publish this pack to share it and deploy it to servers.</Empty>}
+        {!published && (
+          <Empty
+            action={
+              <Button variant="primary" disabled={share.isPending} onClick={() => share.mutate(undefined)}>
+                Share on hub
+              </Button>
+            }
+          >
+            Not on the hub yet. Share it to install servers from it.
+          </Empty>
+        )}
         <ErrorLine error={servers.error} />
-        {published && servers.data?.length === 0 && <Empty>No servers yet. Install one with the steps below.</Empty>}
+        {published && servers.data?.length === 0 && (
+          <Empty>
+            {releases.data?.length ? 'No servers yet. Install one with the steps below.' : 'Publish a version, then install a server with the steps below.'}
+          </Empty>
+        )}
         {servers.data?.map((s) => (
           <ServerRow
             key={s.id}

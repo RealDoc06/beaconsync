@@ -5,6 +5,7 @@ import { Button } from '../../components/ui'
 import { call } from '../../lib/api'
 import { keys, useAction, useApp } from '../../lib/store'
 import type { PackInfo } from '../../lib/types'
+import { useShare } from './Servers'
 
 function Copy({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -34,6 +35,7 @@ export function ShareTab({ p }: { p: PackInfo }) {
     if (out) exportMr.mutate(out)
   }
   const remote = p.config.remote
+  const share = useShare(p.path)
 
   return (
     <div className="flex flex-col">
@@ -50,9 +52,9 @@ export function ShareTab({ p }: { p: PackInfo }) {
           </div>
         ) : settings.data?.signed_in ? (
           <div className="flex items-center gap-3">
-            <span className="text-muted">Publish this pack to get a share code.</span>
-            <Button small onClick={() => go({ name: 'pack', path: p.path, tab: 'servers' })}>
-              Publish update
+            <span className="text-muted">Not on the hub yet.</span>
+            <Button small disabled={share.isPending} onClick={() => share.mutate(undefined)}>
+              Share on hub
             </Button>
           </div>
         ) : (

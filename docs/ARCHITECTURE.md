@@ -104,7 +104,8 @@ trees and commits. Trees and commits are compact JSON with a deterministic key o
 }
 ```
 
-`remote` is absent for local only packs. `upstream` is present for forks and imported modpacks
+`remote` is absent for local only packs: ones tracked while signed out, until the next save
+while signed in shares them. `upstream` is present for forks and imported modpacks
 (`kind: "modrinth"` stores `project`, `name`, `version` and `base_tree`). `base_tree` is the
 upstream tree at the last sync and is the merge base for "Get updates from upstream".
 

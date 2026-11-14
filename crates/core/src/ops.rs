@@ -96,6 +96,20 @@ pub async fn ensure_remote(repo: &Repo, hub: &Hub) -> Result<Remote> {
     Ok(remote)
 }
 
+/// Puts a pack you work on onto the hub: creates it there the first time (which gives it a
+/// share code and lets servers be installed from it) and pushes the branch the hub follows
+/// (other branches stay local until published from, which moves the hub to them). Run after
+/// tracking a pack and after each save. Packs joined to play follow someone else's and are
+/// left alone (`None`).
+pub async fn share(repo: &Repo, hub: &Hub) -> Result<Option<Remote>> {
+    if repo.config()?.role == Role::Subscriber {
+        return Ok(None);
+    }
+    let remote = ensure_remote(repo, hub).await?;
+    push(repo, hub, false).await?;
+    Ok(Some(remote))
+}
+
 /// Pushes the current branch and creates a release players and servers can follow.
 pub async fn publish(repo: &Repo, hub: &Hub, name: &str, notes: &str) -> Result<Release> {
     if repo.is_dirty()? {

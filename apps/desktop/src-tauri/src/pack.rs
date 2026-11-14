@@ -1,7 +1,7 @@
 //! Commands for one pack: files, mods, changes, history, branches, upstream and
 //! subscribed updates, plus header actions (play, rename, delete, export).
 
-use crate::util::{Res, author, blocking, open, progress};
+use crate::util::{Res, author, blocking, open, progress, share};
 use anyhow::{Context, anyhow};
 use beacon_core::{
     fetch::Fetcher,
@@ -229,7 +229,19 @@ pub async fn ignore_files(path: String, files: Vec<String>) -> Res<()> {
 #[tauri::command]
 pub async fn save_version(path: String, message: String) -> Res<String> {
     let message = if message.trim().is_empty() { "Saved changes".to_string() } else { message };
-    Ok(open(&path)?.commit(&message, &author(&Settings::load())).await?)
+    let repo = open(&path)?;
+    let id = repo.commit(&message, &author(&Settings::load())).await?;
+    share(&repo).await;
+    Ok(id)
+}
+
+/// Shares a pack on the hub now (packs tracked before sharing was automatic, or when an
+/// automatic share failed). Unlike the automatic one, errors reach the UI.
+#[tauri::command]
+pub async fn share_pack(path: String) -> Res<()> {
+    let repo = open(&path)?;
+    ops::share(&repo, &crate::util::hub_for(&repo)?).await?.context("packs joined to play follow their owner's")?;
+    Ok(())
 }
 
 #[tauri::command]
