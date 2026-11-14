@@ -968,6 +968,7 @@ async fn agent_loop(hub: Hub, targets: mpsc::Sender<AgentTarget>, actions: mpsc:
     }
 }
 
+#[cfg(unix)]
 fn console_path(dir: &Path) -> PathBuf {
     dir.join(".beacon/console")
 }
