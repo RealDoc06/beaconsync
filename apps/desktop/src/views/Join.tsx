@@ -24,7 +24,9 @@ export function JoinView({ initial }: { initial?: string }) {
   const settings = useQuery({ queryKey: keys.settings, queryFn: () => call('get_settings') })
   const p = preview?.pack
   // The owner on another machine can take an owner copy instead of following or forking.
-  const mine = !!p && !!settings.data?.signed_in && p.owner === settings.data.username
+  const s = settings.data
+  const sameHub = !!preview && !!s && preview.hub.replace(/\/+$/, '') === s.hub.replace(/\/+$/, '')
+  const mine = !!p && sameHub && !!s?.signed_in && p.owner === s.username
 
   return (
     <>

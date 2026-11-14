@@ -222,7 +222,7 @@ pub async fn rollback(dir: &Path, rev: &str, local: bool) -> Result<()> {
         (Some(rel), Some(hub)) => {
             ui::ok(format!("Rolled back. Published {} and deploying to {} server(s)", rel.name, r.servers));
             if let Some(remote) = repo.config()?.remote {
-                follow_deploy(&hub, &remote.pack, &rel.commit).await?;
+                follow_deploy(&hub, &remote.pack, &rel.commit, None).await?;
             }
         }
         _ => ui::ok(format!("Rolled back to {rev}, saved as {}", short(&r.commit))),
@@ -447,19 +447,22 @@ pub async fn deploy(dir: &Path, release: Option<String>, servers: Vec<String>) -
     };
     let d = hub.deploy(&remote.pack, &DeployRequest { release: rel.id.clone(), servers: targets }).await?;
     ui::ok(format!("Deploying {} to {} server(s)", rel.name, d.servers.len()));
-    follow_deploy(&hub, &remote.pack, &rel.commit).await
+    follow_deploy(&hub, &remote.pack, &rel.commit, Some(&d.servers)).await
 }
 
-/// Prints each server's progress until every server sent `commit` is on it, failed or is
-/// offline (it updates when it's back). Ctrl+C stops watching; the deploy carries on.
-async fn follow_deploy(hub: &Hub, pack: &str, commit: &str) -> Result<()> {
+/// Prints each server's progress until every server sent `commit` (only the `only` ids, when
+/// given) is on it, failed or is offline (it updates when it's back). Ctrl+C stops watching;
+/// the deploy carries on.
+async fn follow_deploy(hub: &Hub, pack: &str, commit: &str, only: Option<&[String]>) -> Result<()> {
     let mut seen: std::collections::HashMap<String, (String, String)> = Default::default();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15 * 60);
     while std::time::Instant::now() < deadline {
         let servers = hub.servers(pack).await?;
         let mut waiting = 0;
-        for s in servers.iter().filter(|s| s.target_commit.as_deref() == Some(commit)) {
-            let arrived = s.current_commit.as_deref() == Some(commit) && s.status != "applying";
+        let sent = |s: &&beacon_core::api::Server| only.is_none_or(|ids| ids.contains(&s.id));
+        for s in servers.iter().filter(|s| s.target_commit.as_deref() == Some(commit)).filter(sent) {
+            // A server that fails to start after the update reports the new commit with `failed`.
+            let arrived = s.current_commit.as_deref() == Some(commit) && !matches!(s.status.as_str(), "applying" | "failed");
             let state = match () {
                 _ if !s.online => ("offline".to_string(), "updates when it's back".to_string()),
                 _ if arrived => ("done".to_string(), String::new()),

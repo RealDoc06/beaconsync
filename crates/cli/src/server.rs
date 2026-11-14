@@ -256,7 +256,8 @@ fn default_memory_mb() -> u32 {
             .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
             .map(|kb| kb / 1024)
     };
-    let half = mb("MemTotal:").unwrap_or(16 * 1024) / 2;
+    // No /proc/meminfo (macOS, Windows): assume 8 GB, so 4 GB for Minecraft.
+    let half = mb("MemTotal:").unwrap_or(8 * 1024) / 2;
     // Machines that already run other servers: leave 1 GB of what's free for everything else.
     let fits = mb("MemAvailable:").map_or(half, |free| free.saturating_sub(1024));
     ((half.min(fits).clamp(2048, 8192) / 512) * 512) as u32
@@ -1517,15 +1518,16 @@ async fn act_remote(t: Target, global_dir: Option<PathBuf>, a: ServerAction, don
     hub.server_action(&server.id, &a).await?;
     ui::info(format!("Sent to {}", server.name));
     // A console command: show what the server answers. It comes back through the hub within
-    // seconds; once it does, a little longer catches the rest of a multi-line reply.
+    // seconds; after each line, waiting a little longer catches the rest of a multi-line reply.
     if done.is_empty() {
-        let mut until = Instant::now() + Duration::from_secs(10);
+        let last = Instant::now() + Duration::from_secs(10);
+        let mut until = last;
         while Instant::now() < until {
             let v = hub.console(&server.id, Some(next), 1).await?;
             next = v.next;
             for l in v.lines.iter().filter(|l| !l.starts_with('>')) {
                 println!("  {}", ui::dim(l));
-                until = until.min(Instant::now() + REPLY_WAIT);
+                until = last.min(Instant::now() + REPLY_WAIT);
             }
         }
         return Ok(());

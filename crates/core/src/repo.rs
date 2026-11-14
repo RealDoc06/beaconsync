@@ -445,7 +445,7 @@ impl Repo {
                 let mtime =
                     meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
                 let hash = match index.get(rel) {
-                    Some(i) if i.size == size && i.mtime == mtime => i.hash.clone(),
+                    Some(i) if i.size == size && i.mtime == mtime && mtime != 0 => i.hash.clone(),
                     _ => sha512_file(abs)?,
                 };
                 let mtime = if mtime >= racy_after { 0 } else { mtime };

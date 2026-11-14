@@ -36,9 +36,8 @@ export function ago(unix: number) {
  * keeps what's before it ("v1.3" -> "v1.4"), skipping names already used (after a rollback).
  */
 export function nextVersion(names: string[]) {
-  const [, prefix, n] = names[0]?.match(/^(.*?)(\d+)\D*$/) ?? []
-  if (!n) return 'v1.0'
-  let next = Number(n) + 1
+  const [, prefix = 'v1.', n = '-1'] = names[0]?.match(/^(.*?)(\d+)\D*$/) ?? []
+  let next = BigInt(n) + 1n
   while (names.includes(`${prefix}${next}`)) next++
   return `${prefix}${next}`
 }

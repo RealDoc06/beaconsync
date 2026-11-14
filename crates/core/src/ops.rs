@@ -139,6 +139,12 @@ pub async fn rollback(repo: &Repo, hub: Option<&Hub>, rev: &str, author: &str, o
         Ok(c) => c,
         Err(e) => releases.iter().find(|r| r.name == rev).map(|r| r.commit.clone()).ok_or(e)?,
     };
+    // A release made on another machine may not be here yet.
+    if let Some(hub) = hub
+        && !repo.store.has(&target)
+    {
+        fetch_commit(repo, hub, &target).await?;
+    }
     let label = releases
         .into_iter()
         .find(|r| r.commit == target)

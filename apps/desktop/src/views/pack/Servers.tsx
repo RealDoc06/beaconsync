@@ -104,7 +104,7 @@ export function ServersTab({ p }: { p: PackInfo }) {
         <h3 className="font-semibold">Install on a server</h3>
         <p className="text-muted">On the server machine (Linux or macOS), run:</p>
         <pre className="overflow-x-auto rounded-md border border-line bg-raise px-3 py-2 font-mono text-xs leading-6 select-text">
-          curl -fsSL https://github.com/RealDoc06/beaconsync/releases/latest/download/install.sh | bash{'\n'}beacon login --hub {p.config.remote?.hub ?? '<hub url>'}{'\n'}beacon server install --pack {p.config.remote?.code ?? '<share code>'}
+          curl -fsSL https://github.com/RealDoc06/beaconsync/releases/latest/download/install.sh | bash{'\n'}export PATH="$HOME/.local/bin:$PATH"{'\n'}beacon login --hub {p.config.remote?.hub ?? '<hub url>'}{'\n'}beacon server install --pack {p.config.remote?.code ?? '<share code>'}
         </pre>
         <p className="text-xs text-muted">
           beacon login shows a code. Approve it in Settings. The server then appears here and follows your deploys.
