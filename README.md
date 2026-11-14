@@ -92,7 +92,8 @@ or the binary: `beacon-hub --data ./hub-data --addr 0.0.0.0:8787`. Put it behind
 
 ### 2. Make a pack in the app
 
-Install the desktop app from Releases, set the hub URL in Settings, create an account, then
+Install the desktop app from Releases, create an account (it uses the public hub at
+`https://beaconsync.realdoc06.it` unless you set your own in Settings), then
 New pack → add mods → Save version → Publish. Share the code with friends. While you're signed in,
 every pack you track is on the hub with its own share code from the start, and each save is pushed there.
 

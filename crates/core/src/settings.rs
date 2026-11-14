@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Hub used when the user has not picked one.
-pub const DEFAULT_HUB: &str = "http://localhost:8787";
+pub const DEFAULT_HUB: &str = "https://beaconsync.realdoc06.it";
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Settings {
