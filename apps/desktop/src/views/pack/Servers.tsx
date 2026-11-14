@@ -264,7 +264,7 @@ function DeployDialog({ path, releases, servers, onClose }: { path: string; rele
             ))}
           </div>
         )}
-        <p className="text-xs text-muted">Each server warns players, restarts with the new version and keeps one backup.</p>
+        <p className="text-xs text-muted">Each server warns players, backs up, and restarts on the new version. A failed update rolls back.</p>
       </div>
     </Dialog>
   )

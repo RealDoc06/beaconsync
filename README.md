@@ -160,6 +160,7 @@ beacon upstream --pull          # merge the pack you forked from
 beacon publish v1.0 && beacon deploy
 beacon rollback v1.0            # save v1.0 as a new version, publish and deploy it
 beacon import --modrinth fabulously-optimized
+beacon join 7F3K2Q --edit       # your own pack on another machine: save, publish, deploy from here
 beacon export server ./server.zip
 ```
 
