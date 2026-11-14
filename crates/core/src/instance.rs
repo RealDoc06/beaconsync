@@ -223,6 +223,12 @@ pub fn unique_dir(root: &Path, name: &str) -> PathBuf {
 /// Creates an empty instance folder.
 pub fn create(dir: &Path, name: &str, minecraft: &str, loader: &Loader) -> Result<()> {
     fs::create_dir_all(dir.join("minecraft/mods"))?;
+    // Skips Minecraft's first-run accessibility screen, which would hold the game on the title
+    // screen instead of joining the pack's server. options.txt is never versioned.
+    let options = dir.join("minecraft/options.txt");
+    if !options.exists() {
+        fs::write(options, "onboardAccessibility:false\n")?;
+    }
     fs::write(
         dir.join("instance.cfg"),
         format!("[General]\nConfigVersion=1.2\nInstanceType=OneSix\niconKey=default\nname={name}\n"),

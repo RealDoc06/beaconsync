@@ -129,13 +129,27 @@ pub struct Rollback {
 /// Rolls the pack back to an older version for everyone. The old files are saved as a new
 /// version (history only moves forward, so players, servers and forks keep following), then,
 /// when `hub` is given and the pack is published, released and deployed to every server.
+/// `rev` is a version, branch or, for published packs, a release name like "v1.0".
 pub async fn rollback(repo: &Repo, hub: Option<&Hub>, rev: &str, author: &str, on: OnProgress<'_>) -> Result<Rollback> {
-    let target = repo.resolve(rev)?;
-    let label = match (hub, repo.config()?.remote) {
-        (Some(hub), Some(remote)) => hub.releases(&remote.pack).await?.into_iter().find(|r| r.commit == target).map(|r| r.name),
-        _ => None,
+    let releases = match (hub, repo.config()?.remote) {
+        (Some(hub), Some(remote)) => hub.releases(&remote.pack).await?,
+        _ => vec![],
+    };
+    let target = match repo.resolve(rev) {
+        Ok(c) => c,
+        Err(e) => releases.iter().find(|r| r.name == rev).map(|r| r.commit.clone()).ok_or(e)?,
+    };
+    // A release made on another machine may not be here yet.
+    if let Some(hub) = hub
+        && !repo.store.has(&target)
+    {
+        fetch_commit(repo, hub, &target).await?;
     }
-    .unwrap_or_else(|| repo.read_commit(&target).map(|c| c.message).unwrap_or_default());
+    let label = releases
+        .into_iter()
+        .find(|r| r.commit == target)
+        .map(|r| r.name)
+        .unwrap_or_else(|| repo.read_commit(&target).map(|c| c.message).unwrap_or_default());
     repo.restore(&target, on).await?;
     let commit = if repo.is_dirty()? {
         repo.commit(&format!("Rolled back to \"{label}\""), author).await?
@@ -156,20 +170,42 @@ pub async fn rollback(repo: &Repo, hub: Option<&Hub>, rev: &str, author: &str, o
     Ok(Rollback { commit, release: Some(release), servers })
 }
 
+/// How a published pack is joined.
+#[derive(Serialize, serde::Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum JoinAs {
+    /// Follow the owner's releases (subscriber).
+    Play,
+    /// An editable copy that can pull upstream changes later.
+    Fork,
+    /// The owner's own pack on another machine: saves, publishes and deploys as the pack
+    /// itself, starting from the newest version saved on the hub.
+    Edit,
+}
+
 /// Clones a published pack by share code into a new instance.
-/// `fork = false` follows the owner's releases (subscriber); `fork = true` makes an
-/// editable copy that can pull upstream changes later.
-pub async fn join(hub: &Hub, code: &str, root: &Path, fork: bool, author: &str, on: OnProgress<'_>) -> Result<Repo> {
+pub async fn join(hub: &Hub, code: &str, root: &Path, how: JoinAs, author: &str, on: OnProgress<'_>) -> Result<Repo> {
     let info = hub.public_pack(code).await?;
     let latest = info.latest.clone().context("this pack has no published version yet")?;
-    let name = if fork { format!("{} (fork)", info.name) } else { info.name.clone() };
+    let start = match how {
+        JoinAs::Edit => {
+            let me = hub.me().await.context("sign in to edit your pack")?;
+            if me.username != info.owner {
+                bail!("{} belongs to {}; make your own copy instead", info.name, info.owner);
+            }
+            hub.refs(&info.id).await?.remove("main").unwrap_or_else(|| latest.commit.clone())
+        }
+        JoinAs::Play | JoinAs::Fork => latest.commit.clone(),
+    };
+    let name = if how == JoinAs::Fork { format!("{} (fork)", info.name) } else { info.name.clone() };
     let dir = instance::unique_dir(root, &name);
     let tmp = Repo::init(&dir, crate::repo::local_config(&name))?;
-    fetch_commit(&tmp, hub, &latest.commit).await?;
-    let tree: Tree = tmp.commit_tree(&latest.commit)?;
+    fetch_commit(&tmp, hub, &start).await?;
+    let tree: Tree = tmp.commit_tree(&start)?;
     instance::create(&dir, &name, &tree.minecraft, &tree.loader)?;
-    let config = if fork {
-        PackConfig {
+    let remote = || Remote { hub: hub.base.clone(), pack: info.id.clone(), code: info.code.clone(), branch: "main".into() };
+    let config = match how {
+        JoinAs::Fork => PackConfig {
             name: name.clone(),
             upstream: Some(Upstream::Beacon {
                 hub: hub.base.clone(),
@@ -179,13 +215,12 @@ pub async fn join(hub: &Hub, code: &str, root: &Path, fork: bool, author: &str, 
                 base_tree: tmp.read_commit(&latest.commit)?.tree,
             }),
             ..crate::repo::local_config(&name)
+        },
+        JoinAs::Play => {
+            PackConfig { name: name.clone(), role: Role::Subscriber, remote: Some(remote()), ..crate::repo::local_config(&name) }
         }
-    } else {
-        PackConfig {
-            name: name.clone(),
-            role: Role::Subscriber,
-            remote: Some(Remote { hub: hub.base.clone(), pack: info.id.clone(), code: info.code.clone(), branch: "main".into() }),
-            ..crate::repo::local_config(&name)
+        JoinAs::Edit => {
+            PackConfig { name: name.clone(), role: Role::Owner, remote: Some(remote()), ..crate::repo::local_config(&name) }
         }
     };
     let repo = Repo::init(&dir, config)?;
@@ -193,13 +228,17 @@ pub async fn join(hub: &Hub, code: &str, root: &Path, fork: bool, author: &str, 
     if let Err(e) = crate::companion::install(&repo).await {
         tracing::warn!("companion mod not installed: {e:#}");
     }
-    if fork {
-        repo.commit(&format!("Forked {} {}", info.name, latest.name), author).await?;
-    } else {
-        repo.set_branch("main", &latest.commit)?;
-        if hub.me().await.is_ok() {
-            hub.join(&info.code).await.ok();
+    match how {
+        JoinAs::Fork => {
+            repo.commit(&format!("Forked {} {}", info.name, latest.name), author).await?;
         }
+        JoinAs::Play => {
+            repo.set_branch("main", &start)?;
+            if hub.me().await.is_ok() {
+                hub.join(&info.code).await.ok();
+            }
+        }
+        JoinAs::Edit => repo.set_branch("main", &start)?,
     }
     Ok(repo)
 }

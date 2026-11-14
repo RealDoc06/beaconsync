@@ -1,10 +1,11 @@
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { PageHeader } from '../components/PageHeader'
 import { Button, Input } from '../components/ui'
 import { call } from '../lib/api'
 import { loaderText, shortId } from '../lib/format'
 import { keys, useAction, useApp } from '../lib/store'
-import type { JoinPreview } from '../lib/types'
+import type { JoinAs, JoinPreview } from '../lib/types'
 
 export function JoinView({ initial }: { initial?: string }) {
   const go = useApp((s) => s.go)
@@ -14,13 +15,18 @@ export function JoinView({ initial }: { initial?: string }) {
     label: 'Looking up code',
     onSuccess: setPreview,
   })
-  const join = useAction((fork: boolean) => call('join_pack', { input, fork }), {
+  const join = useAction((how: JoinAs) => call('join_pack', { input, how }), {
     label: 'Downloading pack',
     invalidate: [keys.library],
     done: 'Pack ready',
     onSuccess: (path) => go({ name: 'pack', path, tab: 'mods' }),
   })
+  const settings = useQuery({ queryKey: keys.settings, queryFn: () => call('get_settings') })
   const p = preview?.pack
+  // The owner on another machine can take an owner copy instead of following or forking.
+  const s = settings.data
+  const sameHub = !!preview && !!s && preview.hub.replace(/\/+$/, '') === s.hub.replace(/\/+$/, '')
+  const mine = !!p && sameHub && !!s?.signed_in && p.owner === s.username
 
   return (
     <>
@@ -73,15 +79,22 @@ export function JoinView({ initial }: { initial?: string }) {
               </dd>
             </dl>
             <div className="flex gap-2">
-              <Button variant="primary" disabled={!p.latest || join.isPending} onClick={() => join.mutate(false)}>
+              {mine && (
+                <Button variant="primary" disabled={!p.latest || join.isPending} onClick={() => join.mutate('edit')}>
+                  Edit this pack
+                </Button>
+              )}
+              <Button variant={mine ? 'default' : 'primary'} disabled={!p.latest || join.isPending} onClick={() => join.mutate('play')}>
                 Play this pack
               </Button>
-              <Button disabled={!p.latest || join.isPending} onClick={() => join.mutate(true)}>
+              <Button disabled={!p.latest || join.isPending} onClick={() => join.mutate('fork')}>
                 Make my own copy
               </Button>
             </div>
             <p className="text-xs text-muted">
-              Playing keeps you on the owner's updates. Your own copy can be changed freely and can still get updates later.
+              {mine
+                ? 'Editing continues your pack on this computer from its newest saved version. Playing only follows its updates.'
+                : "Playing keeps you on the owner's updates. Your own copy can be changed freely and can still get updates later."}
             </p>
           </div>
         )}

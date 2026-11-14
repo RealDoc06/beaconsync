@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Button, Dialog, Empty, ErrorLine, Field, Input, Select, Toggle } from '../../components/ui'
 import { useUpdate } from '../../components/UpdateButton'
 import { call } from '../../lib/api'
-import { ago, shortId } from '../../lib/format'
+import { ago, nextVersion, shortId } from '../../lib/format'
 import { askConfirm, keys, packKeys, useAction } from '../../lib/store'
 import type { PackInfo, Release, Server } from '../../lib/types'
 import { ServerPanel } from './ServerPanel'
@@ -57,7 +57,7 @@ export function ServersTab({ p }: { p: PackInfo }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
       <div className="flex items-center gap-2 px-5 py-3">
-        <Button variant="primary" onClick={() => setPublishing(true)}>
+        <Button variant="primary" disabled={releases.isLoading} onClick={() => setPublishing(true)}>
           Publish update
         </Button>
         <Button onClick={() => setDeploying(true)} disabled={!published || !releases.data?.length || !servers.data?.length}>
@@ -102,16 +102,16 @@ export function ServersTab({ p }: { p: PackInfo }) {
 
       <section className="mt-auto flex flex-col gap-2 border-t border-line px-5 py-4">
         <h3 className="font-semibold">Install on a server</h3>
-        <p className="text-muted">On the server machine, install the beacon CLI, then run:</p>
-        <pre className="rounded-md border border-line bg-raise px-3 py-2 font-mono text-xs leading-6 select-text">
-          beacon login --hub {p.config.remote?.hub ?? '<hub url>'}{'\n'}beacon server install --pack {p.config.remote?.code ?? '<share code>'}
+        <p className="text-muted">On the server machine (Linux or macOS), run:</p>
+        <pre className="overflow-x-auto rounded-md border border-line bg-raise px-3 py-2 font-mono text-xs leading-6 select-text">
+          curl -fsSL https://github.com/RealDoc06/beaconsync/releases/latest/download/install.sh | bash{'\n'}export PATH="$HOME/.local/bin:$PATH"{'\n'}beacon login --hub {p.config.remote?.hub ?? '<hub url>'}{'\n'}beacon server install --pack {p.config.remote?.code ?? '<share code>'}
         </pre>
         <p className="text-xs text-muted">
           beacon login shows a code. Approve it in Settings. The server then appears here and follows your deploys.
         </p>
       </section>
 
-      {publishing && <PublishDialog path={path} onClose={() => setPublishing(false)} />}
+      {publishing && <PublishDialog path={path} released={releases.data?.map((r) => r.name) ?? []} onClose={() => setPublishing(false)} />}
       {deploying && releases.data && servers.data && (
         <DeployDialog path={path} releases={releases.data} servers={servers.data} onClose={() => setDeploying(false)} />
       )}
@@ -176,8 +176,9 @@ function ServerRow({
   )
 }
 
-function PublishDialog({ path, onClose }: { path: string; onClose: () => void }) {
-  const [name, setName] = useState('')
+/** `released` are the release names, newest first; the version field starts at the next one. */
+function PublishDialog({ path, released, onClose }: { path: string; released: string[]; onClose: () => void }) {
+  const [name, setName] = useState(() => nextVersion(released))
   const [notes, setNotes] = useState('')
   const publish = useAction(() => call('publish', { path, name, notes }), {
     label: 'Publishing',
@@ -200,7 +201,7 @@ function PublishDialog({ path, onClose }: { path: string; onClose: () => void })
     >
       <div className="flex flex-col gap-4">
         <Field label="Version name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="1.2.0" />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="v1.0" />
         </Field>
         <Field label="Notes">
           <textarea
@@ -263,7 +264,7 @@ function DeployDialog({ path, releases, servers, onClose }: { path: string; rele
             ))}
           </div>
         )}
-        <p className="text-xs text-muted">Each server warns players, restarts with the new version and keeps one backup.</p>
+        <p className="text-xs text-muted">Each server warns players, backs up, and restarts on the new version. A failed update rolls back.</p>
       </div>
     </Dialog>
   )

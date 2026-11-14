@@ -209,3 +209,13 @@ jobs:
       - run: gh release edit "${GITHUB_REF_NAME}" -R "${GITHUB_REPOSITORY}" --draft=false --latest
         env:
           GH_TOKEN: ${{ github.token }}
+      # The release as the API sees it, served from the download CDN so update checks and
+      # install.sh don't spend GitHub's 60 anonymous API calls per hour (crates/core/src/release.rs).
+      # Made after publishing: a draft's download URLs aren't the final ones.
+      - name: Upload release.json
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" |
+            jq '{tag_name, body, html_url, assets: [.assets[] | {name, size, digest, browser_download_url}]}' > release.json
+          gh release upload "${GITHUB_REF_NAME}" -R "${GITHUB_REPOSITORY}" release.json --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

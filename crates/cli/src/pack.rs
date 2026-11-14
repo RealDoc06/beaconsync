@@ -108,12 +108,12 @@ pub async fn import(file: Option<PathBuf>, modrinth: Option<String>) -> Result<(
     Ok(())
 }
 
-pub async fn join(code: &str, fork: bool) -> Result<()> {
+pub async fn join(code: &str, how: ops::JoinAs) -> Result<()> {
     let s = Settings::load();
     let (hub_url, code) = hub::parse_link(code).unwrap_or_else(|| (s.hub_url(), hub::parse_code(code)));
     let hub = Hub::new(&hub_url, s.token.clone());
     let bar = Bar::new();
-    let repo = ops::join(&hub, &code, &s.instances_root(), fork, &author(), &|p| bar.update(p)).await?;
+    let repo = ops::join(&hub, &code, &s.instances_root(), how, &author(), &|p| bar.update(p)).await?;
     bar.done();
     ui::ok(format!("{} is ready at {}", repo.config()?.name, repo.root.display()));
     Ok(())
@@ -218,9 +218,14 @@ pub async fn rollback(dir: &Path, rev: &str, local: bool) -> Result<()> {
     let bar = Bar::new();
     let r = ops::rollback(&repo, hub.as_ref(), rev, &author(), &|p| bar.update(p)).await?;
     bar.done();
-    match r.release {
-        Some(rel) => ui::ok(format!("Rolled back. Published {} and deploying to {} server(s)", rel.name, r.servers)),
-        None => ui::ok(format!("Rolled back to {rev}, saved as {}", short(&r.commit))),
+    match (r.release, hub) {
+        (Some(rel), Some(hub)) => {
+            ui::ok(format!("Rolled back. Published {} and deploying to {} server(s)", rel.name, r.servers));
+            if let Some(remote) = repo.config()?.remote {
+                follow_deploy(&hub, &remote.pack, &rel.commit, None).await?;
+            }
+        }
+        _ => ui::ok(format!("Rolled back to {rev}, saved as {}", short(&r.commit))),
     }
     Ok(())
 }
@@ -297,7 +302,17 @@ pub async fn add(dir: &Path, project: &str) -> Result<()> {
             _ => None,
         })
         .collect();
-    let files = modrinth::resolve_install(project, false, &tree.minecraft, tree.loader.kind, &installed).await?;
+    let files = match modrinth::resolve_install(project, false, &tree.minecraft, tree.loader.kind, &installed).await {
+        Err(e) if modrinth::is_not_found(&e) => {
+            let hits = modrinth::suggest(project, &tree.minecraft, tree.loader.kind).await;
+            let names: Vec<String> = hits.iter().map(|h| format!("{} ({})", h.slug, h.title)).collect();
+            match names.as_slice() {
+                [] => bail!("Modrinth has no project \"{project}\""),
+                _ => bail!("Modrinth has no project \"{project}\". Did you mean {}?", names.join(", ")),
+            }
+        }
+        r => r?,
+    };
     let game = repo.game_dir();
     for (path, entry) in &files {
         fetch::download(entry.source.as_ref().map(|s| s.url()).unwrap_or_default(), &entry.hash, &game.join(path)).await?;
@@ -432,6 +447,45 @@ pub async fn deploy(dir: &Path, release: Option<String>, servers: Vec<String>) -
     };
     let d = hub.deploy(&remote.pack, &DeployRequest { release: rel.id.clone(), servers: targets }).await?;
     ui::ok(format!("Deploying {} to {} server(s)", rel.name, d.servers.len()));
+    follow_deploy(&hub, &remote.pack, &rel.commit, Some(&d.servers)).await
+}
+
+/// Prints each server's progress until every server sent `commit` (only the `only` ids, when
+/// given) is on it, failed or is offline (it updates when it's back). Ctrl+C stops watching;
+/// the deploy carries on.
+async fn follow_deploy(hub: &Hub, pack: &str, commit: &str, only: Option<&[String]>) -> Result<()> {
+    let mut seen: std::collections::HashMap<String, (String, String)> = Default::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15 * 60);
+    while std::time::Instant::now() < deadline {
+        let servers = hub.servers(pack).await?;
+        let mut waiting = 0;
+        let sent = |s: &&beacon_core::api::Server| only.is_none_or(|ids| ids.contains(&s.id));
+        for s in servers.iter().filter(|s| s.target_commit.as_deref() == Some(commit)).filter(sent) {
+            // A server that fails to start after the update reports the new commit with `failed`.
+            let arrived = s.current_commit.as_deref() == Some(commit) && !matches!(s.status.as_str(), "applying" | "failed");
+            let state = match () {
+                _ if !s.online => ("offline".to_string(), "updates when it's back".to_string()),
+                _ if arrived => ("done".to_string(), String::new()),
+                _ => (s.status.clone(), s.message.clone()),
+            };
+            if seen.get(&s.id) != Some(&state) {
+                match state.0.as_str() {
+                    "done" => ui::ok(format!("{} is on the new version", s.name)),
+                    "failed" => ui::warn(format!("{}: {}", s.name, s.message)),
+                    _ if !state.1.is_empty() => println!("  {} {}", s.name, ui::dim(&state.1)),
+                    _ => {}
+                }
+                seen.insert(s.id.clone(), state.clone());
+            }
+            if s.online && !arrived && s.status != "failed" {
+                waiting += 1;
+            }
+        }
+        if waiting == 0 {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
     Ok(())
 }
 

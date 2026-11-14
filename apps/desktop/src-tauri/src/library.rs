@@ -222,13 +222,13 @@ pub async fn preview_code(input: String) -> Res<JoinPreview> {
     Ok(JoinPreview { hub, pack })
 }
 
-/// `fork = false` follows the owner's releases, `fork = true` makes an editable copy.
+/// Joins a pack by code or link: play it, copy it, or edit your own (`ops::JoinAs`).
 #[tauri::command]
-pub async fn join_pack(app: AppHandle, input: String, fork: bool) -> Res<PathBuf> {
+pub async fn join_pack(app: AppHandle, input: String, how: ops::JoinAs) -> Res<PathBuf> {
     let s = Settings::load();
     let (hub_url, code) = resolve_code(&input);
     let token = (hub_url == s.hub_url()).then(|| s.token.clone()).flatten();
     let on = progress(&app);
-    let repo = ops::join(&Hub::new(&hub_url, token), &code, &s.instances_root(), fork, &author(&s), &on).await?;
+    let repo = ops::join(&Hub::new(&hub_url, token), &code, &s.instances_root(), how, &author(&s), &on).await?;
     Ok(repo.root)
 }

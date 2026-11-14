@@ -293,6 +293,24 @@ pub async fn check_updates(files: &[(String, Entry)], minecraft: &str, loader: L
 
 /// Picks a version (explicit id, or newest compatible) and resolves required dependencies
 /// that are not installed yet. Returns `(folder/filename, entry)` pairs to download.
+/// Projects whose name matches `query`, for "did you mean" hints after a mistyped slug.
+pub async fn suggest(query: &str, minecraft: &str, loader: LoaderKind) -> Vec<SearchHit> {
+    let q = SearchQuery {
+        query,
+        project_type: ProjectType::Mod,
+        minecraft: Some(minecraft),
+        loader: Some(loader),
+        offset: 0,
+        limit: 3,
+    };
+    search(q).await.map(|r| r.hits).unwrap_or_default()
+}
+
+/// True when `e` is Modrinth answering 404 (no such project or version).
+pub fn is_not_found(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<reqwest::Error>().is_some_and(|r| r.status() == Some(reqwest::StatusCode::NOT_FOUND)))
+}
+
 pub async fn resolve_install(
     project_or_version: &str,
     explicit_version: bool,

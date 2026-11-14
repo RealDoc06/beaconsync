@@ -138,6 +138,21 @@ function Sidebar() {
 
 function StatusBar() {
   const { busy, progress, notice, set } = useApp()
+  // Success notices clear 5s after they can be seen (window focused); the cleanup keeps an
+  // old timer off a newer notice.
+  useEffect(() => {
+    if (notice?.kind !== 'ok') return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const start = () => {
+      timer ??= setTimeout(() => set({ notice: null }), 5000)
+    }
+    if (document.hasFocus()) start()
+    window.addEventListener('focus', start)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('focus', start)
+    }
+  }, [notice, set])
   if (!busy && !notice) return null
   return (
     <div className="flex h-8 shrink-0 items-center gap-3 border-t border-line px-4 text-xs">

@@ -205,9 +205,18 @@ pub async fn run(cmd: ServerCmd, global_dir: Option<PathBuf>) -> Result<()> {
         ServerCmd::Cmd { target, command } => {
             let command = command.join(" ");
             // On the server machine the console pipe works without the hub.
-            if target.server.is_none() && send_local(&pick(target.path.clone())?, &command) {
-                ui::ok(format!("Sent `{command}`. See the output with `beacon server console`."));
-                return Ok(());
+            if target.server.is_none() {
+                let dir = pick(target.path.clone())?;
+                let log = dir.join("logs/latest.log");
+                let from = fs::metadata(&log).map_or(0, |m| m.len());
+                if send_local(&dir, &command) {
+                    ui::ok(format!("Sent `{command}`"));
+                    tokio::time::sleep(REPLY_WAIT).await;
+                    for l in log_since(&log, from).lines() {
+                        println!("  {}", ui::dim(l));
+                    }
+                    return Ok(());
+                }
             }
             act_remote(target, global_dir.clone(), ServerAction::Command(command), &[]).await
         }
@@ -237,14 +246,21 @@ fn hostname() -> String {
         .unwrap_or_else(|| "minecraft".into())
 }
 
-/// Half the machine's RAM, clamped to 2-8 GB.
+/// Half the machine's RAM, or what's free if that's less, clamped to 2-8 GB.
 fn default_memory_mb() -> u32 {
-    let total_kb: u64 = fs::read_to_string("/proc/meminfo")
-        .ok()
-        .and_then(|s| s.lines().find(|l| l.starts_with("MemTotal:")).and_then(|l| l.split_whitespace().nth(1)?.parse().ok()))
-        .unwrap_or(8 * 1024 * 1024);
-    let half = (total_kb / 1024 / 2) as u32;
-    (half.clamp(2048, 8192) / 512) * 512
+    let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
+    let mb = |key: &str| -> Option<u64> {
+        meminfo
+            .lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split_whitespace().nth(1)?.parse::<u64>().ok())
+            .map(|kb| kb / 1024)
+    };
+    // No /proc/meminfo (macOS, Windows): assume 8 GB, so 4 GB for Minecraft.
+    let half = mb("MemTotal:").unwrap_or(8 * 1024) / 2;
+    // Machines that already run other servers: leave 1 GB of what's free for everything else.
+    let fits = mb("MemAvailable:").map_or(half, |free| free.saturating_sub(1024));
+    ((half.min(fits).clamp(2048, 8192) / 512) * 512) as u32
 }
 
 fn agent_hub(cfg: &ServerConfig) -> Option<Hub> {
@@ -350,6 +366,12 @@ fn ask(s: &Setup, default_name: String, port: u16) -> Result<Answers> {
     Ok(Answers { mode, name, address, memory_mb })
 }
 
+/// The first port from `from` nothing on this machine listens on, so a second server
+/// doesn't default to one that's taken.
+fn free_port(from: u16) -> u16 {
+    (from..from.saturating_add(100)).find(|&p| std::net::TcpListener::bind(("0.0.0.0", p)).is_ok()).unwrap_or(from)
+}
+
 /// Asks to accept the EULA unless `--accept-eula` was passed or the server already did.
 fn eula(s: &Setup, dir: &Path) -> Result<()> {
     let accepted = fs::read_to_string(dir.join("eula.txt")).is_ok_and(|t| t.lines().any(|l| l.trim() == "eula=true"));
@@ -445,7 +467,7 @@ pub(crate) async fn install(pack: Option<String>, path: Option<PathBuf>, s: Setu
         }
     };
     let latest = pack.latest.clone().context("this pack has no release yet; publish one first")?;
-    let a = ask(&s, format!("{} on {}", pack.name, hostname()), 25565)?;
+    let a = ask(&s, format!("{} on {}", pack.name, hostname()), free_port(25565))?;
     let dir = match path {
         Some(p) => p,
         None => PathBuf::from(ui::input(
@@ -947,6 +969,7 @@ async fn agent_loop(hub: Hub, targets: mpsc::Sender<AgentTarget>, actions: mpsc:
     }
 }
 
+#[cfg(unix)]
 fn console_path(dir: &Path) -> PathBuf {
     dir.join(".beacon/console")
 }
@@ -977,6 +1000,21 @@ fn console_pipe(dir: &Path, tx: mpsc::Sender<String>) -> Result<()> {
 }
 
 /// Writes a command to the local console pipe. False when no supervisor listens.
+/// How long `beacon server cmd` shows the server's output for after sending a command.
+const REPLY_WAIT: Duration = Duration::from_millis(1500);
+
+/// What was written to `log` after byte `from` (empty if it was rotated meanwhile).
+fn log_since(log: &Path, from: u64) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut out = String::new();
+    if let Ok(mut f) = fs::File::open(log)
+        && f.seek(SeekFrom::Start(from)).is_ok()
+    {
+        f.read_to_string(&mut out).ok();
+    }
+    out
+}
+
 fn send_local(dir: &Path, command: &str) -> bool {
     #[cfg(unix)]
     {
@@ -1479,7 +1517,19 @@ async fn act_remote(t: Target, global_dir: Option<PathBuf>, a: ServerAction, don
     let mut next = hub.console(&server.id, None, 0).await?.next;
     hub.server_action(&server.id, &a).await?;
     ui::info(format!("Sent to {}", server.name));
+    // A console command: show what the server answers. It comes back through the hub within
+    // seconds; after each line, waiting a little longer catches the rest of a multi-line reply.
     if done.is_empty() {
+        let last = Instant::now() + Duration::from_secs(10);
+        let mut until = last;
+        while Instant::now() < until {
+            let v = hub.console(&server.id, Some(next), 1).await?;
+            next = v.next;
+            for l in v.lines.iter().filter(|l| !l.starts_with('>')) {
+                println!("  {}", ui::dim(l));
+                until = last.min(Instant::now() + REPLY_WAIT);
+            }
+        }
         return Ok(());
     }
     let deadline = Instant::now() + Duration::from_secs(600);
