@@ -3,12 +3,14 @@
 //! With no command it opens the full screen UI (`tui.rs`). Pack commands work on the
 //! instance in the current folder (or `-C <dir>`), like git.
 //! `beacon server ...` installs and runs auto-updating Minecraft servers.
+//! Other commands check for a newer `beacon` in the background (`selfupdate.rs`).
 
 mod account;
 mod backups;
 mod browse;
 mod console;
 mod pack;
+mod selfupdate;
 mod server;
 mod tui;
 mod ui;
@@ -159,6 +161,12 @@ enum Cmd {
         #[command(subcommand)]
         cmd: server::ServerCmd,
     },
+    /// Install the newest `beacon` (runs from the next start). Also checked on every open.
+    SelfUpdate {
+        /// Silent, as started on every open.
+        #[arg(long, hide = true)]
+        background: bool,
+    },
 }
 
 #[tokio::main]
@@ -168,6 +176,10 @@ async fn main() {
         .with_writer(std::io::stderr)
         .init();
     let cli = Cli::parse();
+    // Servers update when the hub says so; the updater doesn't start itself.
+    if !matches!(cli.cmd, Some(Cmd::Server { .. } | Cmd::SelfUpdate { .. })) {
+        selfupdate::spawn_background();
+    }
     if let Err(e) = run(cli).await {
         ui::warn(format!("{e:#}"));
         std::process::exit(1);
@@ -214,5 +226,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         Cmd::Export { kind, out } => pack::export(&dir, kind, &out).await,
         Cmd::Play => pack::play(&dir).await,
         Cmd::Server { cmd } => server::run(cmd, cli.dir).await,
+        Cmd::SelfUpdate { background } => selfupdate::run(background).await,
     }
 }
