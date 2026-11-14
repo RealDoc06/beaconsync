@@ -144,6 +144,13 @@ fn newest(dir: &Path, since: SystemTime) -> Option<PathBuf> {
         .map(|(_, path)| path)
 }
 
+/// False on a headless machine (a Linux server with no X11 or Wayland session), where the game
+/// can't open a window, so Play is hidden.
+pub fn has_display() -> bool {
+    !cfg!(target_os = "linux")
+        || ["DISPLAY", "WAYLAND_DISPLAY"].iter().any(|v| std::env::var_os(v).is_some_and(|v| !v.is_empty()))
+}
+
 /// Launches an instance, optionally joining a server (`host:port`) once the game is up, with
 /// the account picked in BeaconSync (else Prism's default). The first launch without an
 /// installed Prism downloads the built-in one (reported to `on`).
