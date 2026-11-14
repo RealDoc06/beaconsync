@@ -470,6 +470,9 @@ pub async fn export(dir: &Path, kind: ExportKind, out: &Path) -> Result<()> {
 }
 
 pub async fn play(dir: &Path) -> Result<()> {
+    if !prism::has_display() {
+        bail!("no display here, so Minecraft can't open; play from a computer with a screen");
+    }
     let repo = find(dir)?;
     let server = ops::server_address(&repo).await;
     let bar = Bar::new();

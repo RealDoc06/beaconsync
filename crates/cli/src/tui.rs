@@ -204,6 +204,8 @@ struct App {
     busy: Option<(String, Option<Progress>)>,
     note: Option<(bool, String)>,
     account: String,
+    /// This machine can open the game window ([`prism::has_display`]); Play is hidden when not.
+    can_play: bool,
     /// Set by a key; the event loop runs it with the UI suspended.
     suspend: Option<Suspend>,
     ticks: u32,
@@ -395,6 +397,7 @@ impl App {
             busy: None,
             note: None,
             account,
+            can_play: prism::has_display(),
             suspend: None,
             ticks: 0,
             quit: false,
@@ -723,7 +726,7 @@ impl App {
         let published = l.cfg.remote.is_some();
         let owner = l.cfg.role == Role::Owner;
         match (c, self.tab) {
-            ('P', _) => {
+            ('P', _) if self.can_play => {
                 let path = repo.root.clone();
                 self.spawn("Launching", move |tx| async move {
                     let server = ops::server_address(&repo).await;
@@ -1198,7 +1201,9 @@ impl App {
             if role == Some(Role::Subscriber) {
                 hints.push(("u", "update"));
             }
-            hints.push(("P", "play"));
+            if self.can_play {
+                hints.push(("P", "play"));
+            }
         }
         if owned {
             hints.push(("c", "create server"));
