@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>BeaconSync</title>
+    <meta
+      name="description"
+      content="Git-like modpack manager for Minecraft. Build a pack, save versions, roll back, publish, and deploy to servers that update and restart themselves."
+    />
+    <meta name="theme-color" content="#000000" />
+    <meta property="og:title" content="BeaconSync" />
+    <meta
+      property="og:description"
+      content="Git-like modpack manager for Minecraft. Versions, rollbacks, and servers that update themselves."
+    />
+    <meta property="og:image" content="assets/app-mods-macos.png" />
+    <link rel="icon" type="image/png" href="assets/logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="main.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="wrap">
+      <div class="top">
+        <a class="brand" href="./">
+          <img src="assets/logo.png" alt="" width="28" height="28" />
+          BeaconSync
+        </a>
+        <nav class="nav" aria-label="Sections">
+          <a href="#how">How it works</a>
+          <a href="#versions">Versions</a>
+          <a href="#servers">Servers</a>
+          <a href="#players">Players</a>
+          <a href="#hub">Hub</a>
+          <a class="btn" href="https://github.com/RealDoc06/beaconsync">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main" class="wrap">
+      <section class="hero">
+        <div class="hero-top">
+          <div class="pitch">
+            <h1>Git for your Minecraft modpack</h1>
+            <p>
+              Build a pack, save versions, branch and roll back. Publish, and
+              <strong>your servers update and restart themselves</strong>. Players get told in game.
+            </p>
+            <div class="actions">
+              <a class="btn primary" href="https://github.com/RealDoc06/beaconsync/releases/latest"
+                >Download the app</a
+              >
+              <a class="btn" href="#get">Install the CLI</a>
+            </div>
+            <p class="facts">Windows, macOS and Linux. Open source, MIT. Alpha: expect rough edges.</p>
+          </div>
+
+          <dl class="rows">
+            <div>
+              <dt>Desktop app</dt>
+              <dd>Build, version, publish and deploy packs. Prism Launcher is built in, so Play just starts the game.</dd>
+            </div>
+            <div>
+              <dt><code>beacon</code> CLI</dt>
+              <dd>Runs your servers, and does everything the app does from a terminal or a full screen UI.</dd>
+            </div>
+            <div>
+              <dt>Hub</dt>
+              <dd>The sync server you host yourself: accounts, packs, releases and deploys.</dd>
+            </div>
+            <div>
+              <dt>Companion mod</dt>
+              <dd>Tells players in game when an update is out and pulls it.</dd>
+            </div>
+          </dl>
+        </div>
+
+        <figure class="shot">
+          <a href="assets/app-mods-macos.png">
+            <img
+              src="assets/app-mods-macos.png"
+              alt="BeaconSync on macOS: a pack's mod list with a toggle, version and client, server or both sides setting for each mod"
+              width="1280"
+              height="820"
+            />
+          </a>
+        </figure>
+      </section>
+
+      <section class="sec" id="how">
+        <div class="split">
+          <div class="text">
+            <h2>How it works</h2>
+            <p>Four steps, in the app or with <code>beacon</code>. They are the same engine.</p>
+          </div>
+          <figure class="shot">
+            <a href="assets/cli-flow.png">
+              <img
+                src="assets/cli-flow.png"
+                alt="Terminal output: two mods added, version saved, v1.3 published with a share code, deployed to one server, server is on the new version"
+                width="818"
+                height="197"
+                loading="lazy"
+              />
+            </a>
+            <figcaption>Two mods added, saved, published as v1.3 and live on the server.</figcaption>
+          </figure>
+        </div>
+
+        <ol class="steps">
+          <li>
+            <h3>Build</h3>
+            <p>Start a pack or import one, then add mods from Modrinth.</p>
+            <code>beacon new "My Pack" --mc 1.21.1 --loader fabric</code>
+            <code>beacon add sodium</code>
+          </li>
+          <li>
+            <h3>Save a version</h3>
+            <p>See what changed, undo what you don't want, save the rest.</p>
+            <code>beacon status</code>
+            <code>beacon save -m "Add Sodium"</code>
+          </li>
+          <li>
+            <h3>Publish</h3>
+            <p>Release it. Friends join with a share code or link.</p>
+            <code>beacon publish v1.0</code>
+          </li>
+          <li>
+            <h3>Deploy</h3>
+            <p>Send it to one, several or all servers.</p>
+            <code>beacon deploy</code>
+          </li>
+        </ol>
+
+        <div class="then">
+          <figure class="shot">
+            <a href="assets/server-deploy-logs.png">
+              <img
+                src="assets/server-deploy-logs.png"
+                alt="Logs of two servers during a deploy: players warned 30 and 10 seconds ahead, server stopped, backed up, updated to 1.1 and started again"
+                width="1280"
+                height="400"
+                loading="lazy"
+              />
+            </a>
+            <figcaption>
+              <b>Servers update themselves.</b> Warn players, stop, back up, update, restart, report back.
+            </figcaption>
+          </figure>
+          <figure class="shot">
+            <a href="assets/game-update-toast.jpg">
+              <img
+                src="assets/game-update-toast.jpg"
+                alt="In-game toast from BeaconSync: 26.3 Fabric 1.1 available"
+                width="768"
+                height="240"
+                loading="lazy"
+              />
+            </a>
+            <figcaption><b>Players get a toast.</b> The update is pulled while the server restarts.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="sec" id="build">
+        <div class="split">
+          <div class="text">
+            <h2>A library that plays</h2>
+            <p>
+              Your packs and your Prism instances in one list. Press Play: Prism Launcher is downloaded the first time
+              and the game starts. An installed Prism is used instead, with its accounts.
+            </p>
+            <ul class="points">
+              <li><strong>Loaders.</strong> Vanilla, Fabric, Quilt, Forge, NeoForge.</li>
+              <li>
+                <strong>Import.</strong> <code>.mrpack</code>, CurseForge zips, Prism exports, existing Prism instances.
+              </li>
+              <li><strong>Browse.</strong> Modrinth, and CurseForge with your own API key.</li>
+              <li><strong>Per mod.</strong> Turn it off, or set it to client, server or both sides.</li>
+              <li><strong>Per pack.</strong> Memory and Minecraft account. Crashes are reported in the app.</li>
+            </ul>
+          </div>
+          <div class="media">
+            <figure class="shot">
+              <a href="assets/app-library-windows.png">
+                <img
+                  src="assets/app-library-windows.png"
+                  alt="Library on Windows: packs with Minecraft version, loader and mod count, one with an update available, and untracked Prism instances"
+                  width="1266"
+                  height="420"
+                  loading="lazy"
+                />
+              </a>
+              <figcaption>Library on Windows. One joined pack has an update waiting.</figcaption>
+            </figure>
+            <div class="shots c2">
+              <figure class="shot">
+                <a href="assets/app-add-mods.png">
+                  <img
+                    src="assets/app-add-mods.png"
+                    alt="Adding mods: a Modrinth search for AppleSkin beside the pack's mod list"
+                    width="1266"
+                    height="813"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>Search Modrinth and add next to the mod list.</figcaption>
+              </figure>
+              <figure class="shot">
+                <a href="assets/app-import.png">
+                  <img
+                    src="assets/app-import.png"
+                    alt="Import screen: Modrinth modpacks listed with an Install button each, and a tab to import from a file or folder"
+                    width="1180"
+                    height="760"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>Import a Modrinth modpack, a file or a folder.</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="versions">
+        <div class="split">
+          <div class="text">
+            <h2>Versions like git</h2>
+            <p>
+              Every save is a version you can go back to. Branch to try something, merge it if it works. Mods are
+              matched by project, so an updated mod shows as one change.
+            </p>
+            <ul class="points">
+              <li><strong>Changes.</strong> See them, undo them or ignore them before you save.</li>
+              <li><strong>Roll back for everyone.</strong> The old version is saved as a new one, published and deployed. Nothing in history is lost.</li>
+              <li><strong>Upstream.</strong> Copy someone's pack or a Modrinth modpack, then pull their new versions with a three way merge. Your changes stay.</li>
+            </ul>
+            <div class="cmd">
+              <pre><code>beacon log | branch | switch | merge
+beacon restore | reset | discard
+beacon updates --apply   <span class="c"># newer Modrinth versions</span>
+beacon upstream --pull   <span class="c"># merge the pack you forked</span>
+beacon rollback v1.0     <span class="c"># for players and servers too</span></code></pre>
+            </div>
+            <figure class="shot">
+              <a href="assets/cli-rollback.png">
+                <img src="assets/cli-rollback.png" alt="Terminal output: rolled back, published v1.0 (rollback), deploying to one server, server is on the new version" width="710" height="121" loading="lazy" />
+              </a>
+              <figcaption><code>beacon rollback v1.0</code>, start to finish.</figcaption>
+            </figure>
+          </div>
+          <div class="media">
+            <figure class="shot">
+              <a href="assets/app-history.png">
+                <img
+                  src="assets/app-history.png"
+                  alt="History tab: five versions on branch main with author and time, an experiments branch to merge, and Restore this version on the first one"
+                  width="1266"
+                  height="440"
+                  loading="lazy"
+                />
+              </a>
+              <figcaption>History and branches. Restore any version or merge a branch into main.</figcaption>
+            </figure>
+            <div class="shots c3">
+              <figure class="shot">
+                <a href="assets/app-changes.png">
+                  <img
+                    src="assets/app-changes.png"
+                    alt="Changes tab: AppleSkin added and Crash Assistant turned off, each with Undo, beside a Save version button"
+                    width="528"
+                    height="317"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>Unsaved changes.</figcaption>
+              </figure>
+              <figure class="shot">
+                <a href="assets/app-rollback.png">
+                  <img
+                    src="assets/app-rollback.png"
+                    alt="Roll back dialog: files go back to the chosen version, saved as a new version, with Also roll back players and servers turned on"
+                    width="490"
+                    height="294"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>Roll back players and servers too.</figcaption>
+              </figure>
+              <figure class="shot">
+                <a href="assets/app-upstream.png">
+                  <img
+                    src="assets/app-upstream.png"
+                    alt="A forked pack showing Based on 26.3 Fabric with a Get updates button for version 1.2"
+                    width="528"
+                    height="317"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>A fork with updates to pull.</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="servers">
+        <div class="split">
+          <div class="text">
+            <h2>Servers and deploys</h2>
+            <p>
+              <code>beacon server install</code> sets up a server as a systemd service, a Docker container or a plain
+              folder with <code>start.sh</code>. Java and the loader are installed for you. Already running one?
+              <code>beacon server import</code> turns its mods and configs into a pack and leaves the world alone.
+            </p>
+            <ul class="points">
+              <li><strong>Deploy.</strong> Each server warns players, stops cleanly, backs up, updates, restarts and reports back.</li>
+              <li><strong>Failed update.</strong> Rolls back by itself.</li>
+              <li><strong>Console.</strong> Watch it live and send commands, from the app or any machine you are signed in on.</li>
+              <li><strong>Backups.</strong> Create, restore, delete. Ones made by FTB Backups or Simple Backups show up next to BeaconSync's.</li>
+            </ul>
+            <div class="cmd">
+              <pre><code>beacon server console -s Survival
+beacon server cmd -s Survival whitelist add Steve
+beacon server backups -s Survival create
+beacon server stop | start | restart -s Survival</code></pre>
+            </div>
+            <figure class="shot">
+              <a href="assets/cli-cmd.png">
+                <img src="assets/cli-cmd.png" alt="Terminal output: the list command sent to a server and its reply, there are 0 of a max of 20 players online" width="716" height="121" loading="lazy" />
+              </a>
+              <figcaption><code>beacon server cmd</code> prints the reply.</figcaption>
+            </figure>
+            <figure class="shot">
+              <a href="assets/app-deploy-dialog.png">
+                <img src="assets/app-deploy-dialog.png" alt="Deploy to servers dialog: version v1.4, All servers turned on, with Cancel and Deploy" width="448" height="270" loading="lazy" />
+              </a>
+              <figcaption>Deploy from the app: pick a version and the servers.</figcaption>
+            </figure>
+          </div>
+          <div class="media">
+            <figure class="shot">
+              <a href="assets/app-server-console.png">
+                <img
+                  src="assets/app-server-console.png"
+                  alt="Server console in the app: live Minecraft server log for Survival with commands typed from the app, a backup running, and Stop and Restart buttons"
+                  width="1180"
+                  height="760"
+                  loading="lazy"
+                />
+              </a>
+              <figcaption>Live console in the app. Commands go straight to the server.</figcaption>
+            </figure>
+            <div class="shots c2">
+              <figure class="shot">
+                <a href="assets/app-servers-deploying.png">
+                  <img
+                    src="assets/app-servers-deploying.png"
+                    alt="Servers list: Survival and Creative (docker) both applying a rollback from 1.3 to 1.2"
+                    width="962"
+                    height="310"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>Two servers applying a deploy, one systemd, one Docker.</figcaption>
+              </figure>
+              <figure class="shot">
+                <a href="assets/app-server-backups.png">
+                  <img
+                    src="assets/app-server-backups.png"
+                    alt="Backups tab: BeaconSync and Simple Backups backups with age, size and Restore and Delete buttons"
+                    width="962"
+                    height="310"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>Backups, yours and the backup mods'.</figcaption>
+              </figure>
+              <figure class="shot">
+                <a href="assets/tui-releases.png">
+                  <img
+                    src="assets/tui-releases.png"
+                    alt="beacon full screen terminal UI: packs on the left, releases 1.0 to 1.7 with rollbacks, and two servers updating to 1.7"
+                    width="1280"
+                    height="720"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>
+                  Run <code>beacon</code> alone for the full screen UI. Publish with <kbd>p</kbd>, deploy with
+                  <kbd>d</kbd>.
+                </figcaption>
+              </figure>
+              <figure class="shot">
+                <a href="assets/tui-console.png">
+                  <img
+                    src="assets/tui-console.png"
+                    alt="beacon terminal UI showing the Survival server console with a command being typed"
+                    width="1280"
+                    height="720"
+                    loading="lazy"
+                  />
+                </a>
+                <figcaption>The same console in a terminal, over SSH if you like.</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="players">
+        <div class="split">
+          <div class="text">
+            <h2>Players stay in sync</h2>
+            <p>
+              Friends paste a share code in the app and get your pack. From then on they get your updates when you
+              publish.
+            </p>
+            <ul class="points">
+              <li><strong>Toast.</strong> The companion mod says in game when an update is out.</li>
+              <li><strong>Match check.</strong> It tells you if your pack matches the server's version.</li>
+              <li>
+                <strong><code>/beacon pull</code>.</strong> Configs and resource packs apply live. Mods wait for the
+                next restart.
+              </li>
+              <li><strong>After a deploy.</strong> Players rejoin by themselves.</li>
+            </ul>
+            <p class="facts">The companion mod is Fabric only for now (Quilt loads it too), built for 1.21.1 and 26.3.</p>
+          </div>
+          <div class="shots c2">
+            <figure class="shot">
+              <a href="assets/game-pull.jpg">
+                <img
+                  src="assets/game-pull.jpg"
+                  alt="Minecraft chat: BeaconSync says 1.1 is available, the server runs a newer version, then pulls it: 8 files written, 1 mod changed, restart to apply"
+                  width="1266"
+                  height="753"
+                  loading="lazy"
+                />
+              </a>
+              <figcaption><code>/beacon pull</code> from chat.</figcaption>
+            </figure>
+            <figure class="shot">
+              <a href="assets/game-rejoin.png">
+                <img
+                  src="assets/game-rejoin.png"
+                  alt="Minecraft after the server closed for a deploy, with a BeaconSync toast: Updated. Restart Minecraft to rejoin Beacon Test VM"
+                  width="856"
+                  height="512"
+                  loading="lazy"
+                />
+              </a>
+              <figcaption>Server restarted for a deploy. The update is already pulled.</figcaption>
+            </figure>
+            <figure class="shot">
+              <a href="assets/game-match.png">
+                <img
+                  src="assets/game-match.png"
+                  alt="Minecraft chat after joining: BeaconSync says your pack matches Beacon Test VM"
+                  width="856"
+                  height="512"
+                  loading="lazy"
+                />
+              </a>
+              <figcaption>Joining a server: your pack matches.</figcaption>
+            </figure>
+            <figure class="shot">
+              <a href="assets/app-join.png">
+                <img
+                  src="assets/app-join.png"
+                  alt="Join with code: code G8TXWG looked up, showing the pack Beacon Test, its latest version and server, with Edit this pack, Play this pack and Make my own copy"
+                  width="576"
+                  height="304"
+                  loading="lazy"
+                />
+              </a>
+              <figcaption>Join with a code: play the pack, or make your own copy.</figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="hub">
+        <div class="split">
+          <div class="text">
+            <h2>Host the hub yourself</h2>
+            <p>
+              The hub keeps accounts, packs, releases and deploys, and it is the thing your servers listen to. It is one
+              container or one binary, on your machine.
+            </p>
+          </div>
+          <div class="media">
+            <div
+              class="cmd copyable"
+              data-copy="docker run -d -p 8787:8787 -v hub-data:/data -e BEACON_HUB_PUBLIC_URL=https://hub.example.com ghcr.io/realdoc06/beacon-hub"
+            >
+              <pre><code><span class="p">$ </span>docker run -d -p 8787:8787 -v hub-data:/data \
+    -e BEACON_HUB_PUBLIC_URL=https://hub.example.com \
+    ghcr.io/realdoc06/beacon-hub</code></pre>
+            </div>
+            <ul class="points">
+              <li><strong>Or the binary.</strong> <code>beacon-hub --data ./hub-data --addr 0.0.0.0:8787</code></li>
+              <li><strong>Public?</strong> Put it behind TLS.</li>
+              <li><strong>Then.</strong> Set the hub URL in the app's Settings and create an account.</li>
+              <li>
+                <strong>New machines.</strong> <code>beacon login</code> shows a code. Approve it in the app or at
+                <code>&lt;hub&gt;/device</code>.
+              </li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="sec" id="get">
+        <div class="split">
+          <div class="text">
+            <h2>Get BeaconSync</h2>
+            <p>Alpha. Everything here works end to end, but expect rough edges, and please report bugs.</p>
+            <div class="actions">
+              <a class="btn primary" href="https://github.com/RealDoc06/beaconsync/releases/latest"
+                >Download the app</a
+              >
+              <a class="btn" href="https://github.com/RealDoc06/beaconsync/issues">Report a bug</a>
+            </div>
+          </div>
+          <dl class="rows">
+            <div>
+              <dt>Desktop app</dt>
+              <dd>
+                <span
+                  >Windows, macOS and Linux, from
+                  <a href="https://github.com/RealDoc06/beaconsync/releases/latest">the latest release</a>. It updates
+                  itself.</span
+                >
+              </dd>
+            </div>
+            <div>
+              <dt><code>beacon</code> CLI</dt>
+              <dd>
+                <span>Linux and macOS, x64 and arm64. The script checks GitHub's checksum.</span>
+                <div
+                  class="cmd copyable"
+                  data-copy="curl -fsSL https://github.com/RealDoc06/beaconsync/releases/latest/download/install.sh | bash"
+                >
+                  <pre><code><span class="p">$ </span>curl -fsSL https://github.com/RealDoc06/beaconsync/releases/latest/download/install.sh | bash</code></pre>
+                </div>
+                <span
+                  >On Windows, download <code>beacon-x86_64-pc-windows-msvc.exe</code> from
+                  <a href="https://github.com/RealDoc06/beaconsync/releases/latest">the release</a>.</span
+                >
+              </dd>
+            </div>
+            <div>
+              <dt>A server</dt>
+              <dd>
+                <div class="cmd">
+                  <pre><code>beacon login            <span class="c"># approve the code in the app</span>
+beacon server install   <span class="c"># pick the pack, then service / docker / plain</span>
+beacon server status    <span class="c"># version, backups, hub state</span></code></pre>
+                </div>
+              </dd>
+            </div>
+            <div>
+              <dt>Source</dt>
+              <dd>
+                <span
+                  >MIT, on <a href="https://github.com/RealDoc06/beaconsync">GitHub</a>. Rust core, CLI and hub, a Tauri
+                  and React app, a Fabric mod.
+                  <a href="https://github.com/RealDoc06/beaconsync/blob/main/docs/ARCHITECTURE.md">How it is built</a
+                  >.</span
+                >
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <div class="foot">
+        <span>BeaconSync. MIT licensed. Not affiliated with Mojang or Microsoft.</span>
+        <nav aria-label="Links">
+          <a href="https://github.com/RealDoc06/beaconsync">GitHub</a>
+          <a href="https://github.com/RealDoc06/beaconsync/releases/latest">Releases</a>
+          <a href="https://github.com/RealDoc06/beaconsync#readme">Docs</a>
+          <button class="btn theme" type="button" hidden>Light theme</button>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>
