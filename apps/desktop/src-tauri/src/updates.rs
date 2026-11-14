@@ -19,8 +19,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::util::Res;
 
-/// Background checks run every 10 to 15 minutes. The spread keeps many open apps from hitting
-/// GitHub's API in lockstep (60 unauthenticated requests per hour per IP).
+/// Background checks run every 10 to 15 minutes: 4 to 6 of GitHub's 60 unauthenticated
+/// requests per hour per IP. The spread keeps an app's checks from settling into a fixed beat.
 const CHECK_MIN: Duration = Duration::from_secs(10 * 60);
 const CHECK_SPREAD: Duration = Duration::from_secs(5 * 60);
 
@@ -142,6 +142,8 @@ struct Inner {
 pub struct Updates {
     kind: Kind,
     inner: Mutex<Inner>,
+    /// Held for a whole check, so a manual and a background one can't apply out of order.
+    checking: tokio::sync::Mutex<()>,
 }
 
 impl Updates {
@@ -190,6 +192,7 @@ pub fn start(app: &AppHandle) {
     app.manage(Updates {
         kind: Kind::detect(),
         inner: Mutex::new(Inner { latest: None, phase: Phase::Available, downloaded: 0, error: None, file: None }),
+        checking: Default::default(),
     });
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -201,15 +204,21 @@ pub fn start(app: &AppHandle) {
 }
 
 /// Fetches the newest release. A new tag replaces the offer; the same tag keeps any download in
-/// progress or ready to install.
+/// progress or ready to install. Nothing changes mid-install, which still needs the file.
 async fn check(app: &AppHandle) -> anyhow::Result<()> {
-    let r = release::latest().await?;
     let u = app.state::<Updates>();
-    let changed = u.inner.lock().unwrap().latest.as_ref().is_none_or(|old| old.tag_name != r.tag_name);
-    if changed {
-        u.update(app, |s| {
+    let _one = u.checking.lock().await;
+    let r = release::latest().await?;
+    let changed = {
+        let mut s = u.inner.lock().unwrap();
+        let replace = s.phase != Phase::Installing && s.latest.as_ref().is_none_or(|old| old.tag_name != r.tag_name);
+        if replace {
             *s = Inner { latest: Some(r), phase: Phase::Available, downloaded: 0, error: None, file: None };
-        });
+        }
+        replace
+    };
+    if changed {
+        app.emit("update", u.view()).ok();
     }
     Ok(())
 }

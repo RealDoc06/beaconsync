@@ -66,7 +66,10 @@ async fn get(url: String) -> Result<Release> {
         .send()
         .await
         .context("checking for BeaconSync updates")?;
-    ensure!(resp.status().is_success(), "GitHub answered {} for {url}", resp.status());
+    let status = resp.status();
+    // Unauthenticated API calls are capped at 60 per hour per IP.
+    ensure!(!matches!(status.as_u16(), 403 | 429), "GitHub's update check limit is used up for now, try again later");
+    ensure!(status.is_success(), "GitHub answered {status} for {url}");
     Ok(resp.json().await?)
 }
 
