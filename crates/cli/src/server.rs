@@ -6,7 +6,7 @@
 //! and carries out owner actions (commands, start/stop, backups) sent from the app or CLI.
 
 use crate::{
-    backups,
+    backups, selfupdate,
     ui::{self, Bar},
 };
 use anyhow::{Context, Result, bail};
@@ -1209,28 +1209,14 @@ async fn self_update(agent: &Option<Hub>, mc: &mut Option<Mc>, version: &str) ->
         say(format!("updating beacon {} to {version}", release::VERSION));
         report(agent, None, "applying", format!("updating beacon to {version}"), None).await;
         let rel = release::by_version(version).await?;
-        let name = release::cli_asset();
-        let asset = rel.asset(&name).with_context(|| format!("{} has no {name}", rel.tag_name))?;
-        let exe = std::env::current_exe()?;
-        let new = exe.with_file_name(format!("{name}.new"));
-        say(format!("downloading {name} ({})", size(asset.size)));
-        release::download(asset, &new, |_| {}).await?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&new, fs::Permissions::from_mode(0o755))?;
-        }
-        let out = Command::new(&new).arg("--version").output().await.context("running the new beacon")?;
-        if !String::from_utf8_lossy(&out.stdout).contains(rel.version()) {
-            fs::remove_file(&new).ok();
-            bail!("the downloaded beacon does not run on this machine");
-        }
+        say(format!("downloading beacon {version}"));
+        let staged = selfupdate::stage(&rel, |_, _| {}).await?;
         say("verified");
-        Ok((exe, new))
+        Ok(staged)
     }
     .await;
-    let (exe, new) = match staged {
-        Ok(paths) => paths,
+    let staged = match staged {
+        Ok(staged) => staged,
         Err(e) => return e,
     };
     if let Some(mut m) = mc.take() {
@@ -1241,39 +1227,31 @@ async fn self_update(agent: &Option<Hub>, mc: &mut Option<Mc>, version: &str) ->
         m.stop().await;
     }
     say(format!("restarting on beacon {version}"));
-    match restart_into(&exe, &new) {
+    match restart_into(staged) {
         Ok(never) => match never {},
         Err(e) => e,
     }
 }
 
-/// Swaps the running executable for `new` and becomes it, with the same arguments. On Unix
-/// this is `exec`: same pid, so systemd and docker don't notice. Windows can rename a running
-/// exe but not replace it, so the old one moves aside and a new process takes over.
-fn restart_into(exe: &Path, new: &Path) -> Result<std::convert::Infallible> {
+/// Swaps the running executable for the staged build and becomes it, with the same arguments.
+/// On Unix this is `exec`: same pid, so systemd and docker don't notice. On Windows a new
+/// process takes over.
+fn restart_into(staged: selfupdate::Staged) -> Result<std::convert::Infallible> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let exe = staged.exe.clone();
+    let old = staged.swap()?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        // A link to the old build, restored if exec fails. Overwritten by the next update.
-        let old = exe.with_extension("old");
-        fs::remove_file(&old).ok();
-        fs::hard_link(exe, &old)?;
-        fs::rename(new, exe)?;
-        let e = std::process::Command::new(exe).args(&args).exec();
-        fs::rename(&old, exe).ok();
+        let e = std::process::Command::new(&exe).args(&args).exec();
+        // Put the old build back so the next start still works.
+        fs::rename(&old, &exe).ok();
         Err(e.into())
     }
     #[cfg(not(unix))]
     {
-        let old = exe.with_extension("old.exe");
-        fs::remove_file(&old).ok();
-        fs::rename(exe, &old)?;
-        if let Err(e) = fs::rename(new, exe) {
-            fs::rename(&old, exe).ok();
-            return Err(e.into());
-        }
-        std::process::Command::new(exe).args(&args).spawn()?;
+        let _ = old;
+        std::process::Command::new(&exe).args(&args).spawn()?;
         std::process::exit(0)
     }
 }

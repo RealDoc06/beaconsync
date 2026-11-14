@@ -60,7 +60,8 @@ More in [docs/screenshots](docs/screenshots).
   like FTB Backups or Simple Backups show up next to BeaconSync's own.
 - **Updates.** The app updates itself from GitHub releases (download, verify, restart) and
   updates `beacon` on your servers with one click: each server checks the new build, warns
-  players and restarts on it.
+  players and restarts on it. The `beacon` CLI checks for a new build when it starts (at most
+  every 10 minutes) and installs it for the next start; `beacon self-update` does it right away.
 - **Players.** Friends join with a share code or link. The companion mod shows an in-game toast
   when an update is out, tells you if you match the server's version, and `/beacon pull` applies
   configs and resource packs live (mods are staged for the next restart). After a deploy players
