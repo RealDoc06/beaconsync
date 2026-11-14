@@ -1,0 +1,636 @@
+/* BeaconSync site.
+   Layout: one left-aligned column of sections split by hairlines, like rows in the app.
+   Each section is a narrow text column beside real screenshots; it stacks on phones.
+   Dark is the default (same tokens as the desktop app). Light applies only when the
+   visitor picks it with the footer toggle (data-theme="light" on <html>). */
+
+:root {
+  color-scheme: dark;
+  --bg: #000;
+  --fg: #fff;
+  --muted: #9a9fa3;
+  --line: #1f2224;
+  --line-strong: #363a3d;
+  --raise: #0a0b0c;
+  --accent: #7ee8ff;
+  --ok: #5fd38d;
+  --btn-bg: #fff;
+  --btn-fg: #000;
+
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --t-xs: 0.8125rem;
+  --t-sm: 0.875rem;
+  --t-base: 1rem;
+  --t-lg: 1.125rem;
+  --t-h3: 1.0625rem;
+  --t-h2: clamp(1.625rem, 1.2rem + 1.6vw, 2.25rem);
+  --t-h1: clamp(2.5rem, 1.4rem + 5vw, 4.75rem);
+
+  --gutter: 16px;
+  --wrap: 1240px;
+  --radius: 6px;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #fff;
+  --fg: #000;
+  --muted: #565c61;
+  --line: #e2e5e7;
+  --line-strong: #b9bec2;
+  --raise: #f5f6f7;
+  --accent: #006f87;
+  --ok: #17803f;
+  --btn-bg: #000;
+  --btn-fg: #fff;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--t-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+a {
+  color: inherit;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-color: currentColor;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+h1,
+h2,
+h3,
+p,
+ol,
+ul,
+dl,
+dd,
+figure,
+pre {
+  margin: 0;
+}
+
+ol,
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+  font-weight: 600;
+}
+
+h1 {
+  font-size: var(--t-h1);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+
+h2 {
+  font-size: var(--t-h2);
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+
+h3 {
+  font-size: var(--t-h3);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+}
+
+.wrap {
+  max-width: var(--wrap);
+  margin-inline: auto;
+  padding-left: max(var(--gutter), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--gutter), env(safe-area-inset-right, 0px));
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+}
+
+.skip:focus {
+  left: 16px;
+  top: 16px;
+  z-index: 10;
+  background: var(--bg);
+  padding: 8px 12px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.accent {
+  color: var(--accent);
+}
+
+/* Header */
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-block: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.brand img {
+  width: 28px;
+  height: 28px;
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  font-size: var(--t-sm);
+}
+
+.nav a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.nav a:hover,
+.nav a.on {
+  color: var(--fg);
+}
+
+/* Buttons: the app's own two styles. */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font: 600 var(--t-sm) / 1 var(--font-sans);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: var(--fg);
+}
+
+.btn.primary {
+  background: var(--btn-bg);
+  border-color: var(--btn-bg);
+  color: var(--btn-fg);
+}
+
+.btn.primary:hover {
+  opacity: 0.88;
+}
+
+.nav .btn {
+  min-height: 32px;
+  padding: 0 12px;
+  color: var(--fg);
+}
+
+/* Hero */
+
+.hero {
+  display: grid;
+  gap: 40px;
+  padding-block: 56px 72px;
+}
+
+.hero-top {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 48px;
+  align-items: end;
+}
+
+.pitch {
+  display: grid;
+  gap: 22px;
+}
+
+.pitch p {
+  max-width: 34em;
+  font-size: var(--t-lg);
+  color: var(--muted);
+}
+
+.pitch p strong {
+  color: var(--fg);
+  font-weight: 500;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pitch .facts,
+.text > .facts {
+  font-size: var(--t-sm);
+  color: var(--muted);
+}
+
+/* Label and value rows, used for install targets and the get list. */
+
+.rows {
+  border-top: 1px solid var(--line);
+}
+
+.rows > div {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  gap: 6px 16px;
+  padding-block: 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--t-sm);
+}
+
+.rows dt {
+  font-weight: 600;
+}
+
+.rows dd {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+}
+
+.rows dd a {
+  color: var(--fg);
+}
+
+/* Command blocks */
+
+.cmd {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raise);
+}
+
+.cmd pre {
+  overflow-x: auto;
+  padding: 12px 14px;
+  font-size: var(--t-xs);
+  line-height: 1.7;
+  color: var(--fg);
+}
+
+/* Copyable blocks: the command wraps in its own column so all of it shows, the button sits beside it. */
+.cmd.copyable {
+  display: flex;
+  align-items: flex-start;
+}
+
+.cmd.copyable pre {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cmd .c {
+  color: var(--muted);
+}
+
+.cmd .p {
+  color: var(--accent);
+  user-select: none;
+}
+
+.copy {
+  flex: none;
+  margin: 6px 6px 6px 0;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 600 0.75rem / 1 var(--font-sans);
+  cursor: pointer;
+}
+
+.copy:hover {
+  border-color: var(--fg);
+}
+
+/* Screenshots: a hairline frame, linked to the full size file. */
+
+.shot {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  align-content: start;
+}
+
+.shot a {
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #000;
+}
+
+.shot a:hover {
+  border-color: var(--line-strong);
+}
+
+.shot img {
+  width: 100%;
+}
+
+.shot figcaption {
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+
+.shot figcaption b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.shots {
+  display: grid;
+  gap: 20px 16px;
+  min-width: 0;
+}
+
+.shots.c2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.shots.c3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* Sections */
+
+.sec {
+  display: grid;
+  gap: 32px;
+  padding-block: 72px;
+  border-top: 1px solid var(--line);
+  scroll-margin-top: 8px;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+  gap: 48px;
+  align-items: start;
+}
+
+.text {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.text > p {
+  color: var(--muted);
+  max-width: 36em;
+}
+
+.text > p strong,
+.points strong {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.points {
+  display: grid;
+  border-top: 1px solid var(--line);
+  font-size: var(--t-sm);
+  color: var(--muted);
+}
+
+.points li {
+  padding-block: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.media {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* How it works: a real sequence, so the steps are numbered. */
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--line);
+  counter-reset: step;
+}
+
+.steps li {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 18px 20px 20px 0;
+  min-width: 0;
+  counter-increment: step;
+  font-size: var(--t-sm);
+  color: var(--muted);
+}
+
+.steps li + li {
+  padding-left: 20px;
+  border-left: 1px solid var(--line);
+}
+
+.steps h3::before {
+  content: counter(step);
+  display: inline-block;
+  width: 1.4em;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.steps h3 {
+  color: var(--fg);
+}
+
+.steps code {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.then {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+/* Footer */
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  padding-block: 28px 40px;
+  border-top: 1px solid var(--line);
+  font-size: var(--t-sm);
+  color: var(--muted);
+}
+
+.foot nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+}
+
+.foot a {
+  color: var(--fg);
+}
+
+.theme {
+  min-height: 32px;
+  padding: 0 12px;
+  font-weight: 500;
+}
+
+/* Tablet */
+
+@media (max-width: 1000px) {
+  .hero-top,
+  .split {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+  }
+
+  .steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .steps li:nth-child(3) {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .steps li:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+
+  .nav a:not(.btn) {
+    display: none;
+  }
+}
+
+/* Phone */
+
+@media (max-width: 640px) {
+  .hero {
+    gap: 28px;
+    padding-block: 36px 48px;
+  }
+
+  .sec {
+    gap: 24px;
+    padding-block: 48px;
+  }
+
+  .shots.c2,
+  .shots.c3,
+  .then,
+  .steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .steps li,
+  .steps li + li {
+    padding: 14px 0 16px;
+    border-left: 0;
+  }
+
+  .steps li + li {
+    border-top: 1px solid var(--line);
+  }
+
+  .rows > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .actions .btn {
+    flex: 1 1 auto;
+  }
+}
