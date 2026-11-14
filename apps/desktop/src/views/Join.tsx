@@ -1,3 +1,4 @@
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { PageHeader } from '../components/PageHeader'
 import { Button, Input } from '../components/ui'
@@ -20,7 +21,10 @@ export function JoinView({ initial }: { initial?: string }) {
     done: 'Pack ready',
     onSuccess: (path) => go({ name: 'pack', path, tab: 'mods' }),
   })
+  const settings = useQuery({ queryKey: keys.settings, queryFn: () => call('get_settings') })
   const p = preview?.pack
+  // The owner on another machine can take an owner copy instead of following or forking.
+  const mine = !!p && !!settings.data?.signed_in && p.owner === settings.data.username
 
   return (
     <>
@@ -73,7 +77,12 @@ export function JoinView({ initial }: { initial?: string }) {
               </dd>
             </dl>
             <div className="flex gap-2">
-              <Button variant="primary" disabled={!p.latest || join.isPending} onClick={() => join.mutate('play')}>
+              {mine && (
+                <Button variant="primary" disabled={!p.latest || join.isPending} onClick={() => join.mutate('edit')}>
+                  Edit this pack
+                </Button>
+              )}
+              <Button variant={mine ? 'default' : 'primary'} disabled={!p.latest || join.isPending} onClick={() => join.mutate('play')}>
                 Play this pack
               </Button>
               <Button disabled={!p.latest || join.isPending} onClick={() => join.mutate('fork')}>
@@ -81,7 +90,9 @@ export function JoinView({ initial }: { initial?: string }) {
               </Button>
             </div>
             <p className="text-xs text-muted">
-              Playing keeps you on the owner's updates. Your own copy can be changed freely and can still get updates later.
+              {mine
+                ? 'Editing continues your pack on this computer from its newest saved version. Playing only follows its updates.'
+                : "Playing keeps you on the owner's updates. Your own copy can be changed freely and can still get updates later."}
             </p>
           </div>
         )}

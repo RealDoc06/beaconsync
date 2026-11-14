@@ -31,6 +31,18 @@ export function ago(unix: number) {
   return 'just now'
 }
 
+/**
+ * Next version name after the newest release (`names` newest first): bumps the last number and
+ * keeps what's before it ("v1.3" -> "v1.4"), skipping names already used (after a rollback).
+ */
+export function nextVersion(names: string[]) {
+  const [, prefix, n] = names[0]?.match(/^(.*?)(\d+)\D*$/) ?? []
+  if (!n) return 'v1.0'
+  let next = Number(n) + 1
+  while (names.includes(`${prefix}${next}`)) next++
+  return `${prefix}${next}`
+}
+
 export function count(n: number) {
   return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}k` : String(n)
 }

@@ -138,6 +138,12 @@ function Sidebar() {
 
 function StatusBar() {
   const { busy, progress, notice, set } = useApp()
+  // Success notices clear themselves; the cleanup keeps an old timer off a newer notice.
+  useEffect(() => {
+    if (notice?.kind !== 'ok') return
+    const timer = setTimeout(() => set({ notice: null }), 5000)
+    return () => clearTimeout(timer)
+  }, [notice, set])
   if (!busy && !notice) return null
   return (
     <div className="flex h-8 shrink-0 items-center gap-3 border-t border-line px-4 text-xs">
