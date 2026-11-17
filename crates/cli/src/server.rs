@@ -1042,8 +1042,7 @@ async fn wait_exit(mc: &mut Option<Mc>) -> std::io::Result<std::process::ExitSta
     }
 }
 
-/// Long polls the hub for deployments and owner actions.
-/// Long polls the hub for deployments and actions. When the hub lacks this server's state (it
+/// Long polls the hub for deployments and owner actions. When the hub lacks this server's state (it
 /// keeps it in memory, so after a restart), asks on `resync` for it to be sent again.
 async fn agent_loop(hub: Hub, targets: mpsc::Sender<AgentTarget>, actions: mpsc::Sender<ServerAction>, resync: mpsc::Sender<()>) {
     let mut last: Option<String> = None;
