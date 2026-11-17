@@ -224,6 +224,7 @@ async fn console_and_actions_are_relayed_between_owner_and_server() {
             lines: vec!["Done (3.2s)!".into()],
             backups: Some(vec![backup.clone()]),
             running: Some(true),
+            retention: None,
         })
         .await
         .unwrap();
@@ -251,6 +252,15 @@ async fn console_and_actions_are_relayed_between_owner_and_server() {
     let p = tokio::time::timeout(Duration::from_secs(3), polling).await.unwrap().unwrap();
     assert_eq!(p.actions, vec![ServerAction::Command("list".into())]);
     assert!(agent.agent_poll(0, None).await.unwrap().actions.is_empty());
+
+    // Retention changes only go to agents that report a rule, as older ones can't read them.
+    let keep = ServerAction::SetRetention(Retention { keep: Some(3), ..Default::default() });
+    assert!(owner.server_action(&sid, &keep).await.is_err());
+    let report = AgentConsole { backups: Some(vec![]), retention: Some(Retention::default()), ..Default::default() };
+    agent.agent_console(&report).await.unwrap();
+    assert_eq!(owner.console(&sid, None, 0).await.unwrap().retention, Some(Retention::default()));
+    owner.server_action(&sid, &keep).await.unwrap();
+    assert_eq!(agent.agent_poll(0, None).await.unwrap().actions, vec![keep]);
 
     // Only the owner can watch or control the server.
     assert!(other.console(&sid, None, 0).await.is_err());

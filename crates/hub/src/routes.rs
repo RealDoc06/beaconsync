@@ -50,6 +50,7 @@ struct Console {
     end: u64,
     backups: Vec<Backup>,
     running: bool,
+    retention: Option<Retention>,
     actions: Vec<ServerAction>,
     /// Wakes viewers waiting for new lines.
     changed: Arc<Notify>,
@@ -688,6 +689,7 @@ async fn agent_console(State(s): State<AppState>, srv: AuthServer, Json(c): Json
         }
         if let Some(b) = c.backups {
             con.backups = b;
+            con.retention = c.retention;
         }
         if let Some(r) = c.running {
             con.running = r;
@@ -740,7 +742,8 @@ async fn server_console(
             let fresh = q.after.is_none_or(|a| a > c.end);
             let from = if fresh { c.end.saturating_sub(CONSOLE_TAIL) } else { q.after.unwrap_or(0) }.max(start);
             let lines = c.lines.iter().skip((from - start) as usize).cloned().collect();
-            (ConsoleView { lines, next: c.end, backups: c.backups.clone(), online, running: c.running && online }, fresh)
+            let running = c.running && online;
+            (ConsoleView { lines, next: c.end, backups: c.backups.clone(), online, running, retention: c.retention }, fresh)
         });
         if !view.lines.is_empty() || fresh || tokio::time::Instant::now() >= deadline {
             return Ok(Json(view));
@@ -765,6 +768,10 @@ async fn server_action(
     // Agents that don't report a version predate `update` and would fail to read it.
     if matches!(a, ServerAction::Update(_)) && server.agent_version.is_none() {
         return Err(Error::bad("this server's beacon is too old to update itself; run `beacon server install` on it again"));
+    }
+    // Agents that don't report a retention rule predate it and would fail to read the action.
+    if matches!(a, ServerAction::SetRetention(_)) && s.console(&sid, |c| c.retention.is_none()) {
+        return Err(Error::bad("this server's beacon is too old to change backup retention; update it first"));
     }
     if let ServerAction::Command(c) = &a
         && (c.trim().is_empty() || c.contains('\n'))

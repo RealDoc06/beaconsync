@@ -152,10 +152,11 @@ GET|POST /api/packs/:id/servers    { name, mode, address } -> { server, token }
 DELETE   /api/packs/:id/servers/:sid
 POST /api/packs/:id/deploy         { release, servers: [ids] | "all" }
 GET  /api/servers/:sid/console?after=N&wait=20
-                                   -> { lines, next, backups, online, running }   (long poll; no `after` = last 500 lines)
+                                   -> { lines, next, backups, online, running, retention }   (long poll; no `after` = last 500 lines)
 POST /api/servers/:sid/actions     { kind: "command", arg } | { kind: "start|stop|restart|backup" }
                                    | { kind: "restore|delete_backup", arg: backup id }
                                    | { kind: "update", arg: BeaconSync version }   (refused for agents that don't report a version)
+                                   | { kind: "set_retention", arg: { keep, max_bytes, max_days } }   (refused for agents that don't report one)
 ```
 
 Server agent (server token):
@@ -164,7 +165,7 @@ Server agent (server token):
 GET  /api/agent/poll?wait=25&known=<deployment>
                                -> { target: { commit, release, deployment } | null, actions: [...] }   (long poll)
 POST /api/agent/report         { deployment, status: "applying|done|failed|running|stopped|rolledback", message, commit, agent }
-POST /api/agent/console        { lines, backups?, running? }
+POST /api/agent/console        { lines, backups?, running?, retention? }
 ```
 
 `agent` is the agent's `beacon` version; servers list it as `agent_version`.
@@ -179,8 +180,10 @@ agent sends its backups and state again when it starts.
 3. Deploy sets the target release on the chosen servers (one, several or all).
 4. Each server runs `beacon server run`, which supervises the Minecraft process and long polls
    the hub. On a new target it warns players, stops the server, backs it up, applies the
-   new tree, restarts and reports back. It keeps the last 10 BeaconSync backups in
-   `.beacon/backups`, and also lists world archives backup mods leave in `*backup*` folders.
+   new tree, restarts and reports back. BeaconSync backups go in `.beacon/backups` and are
+   pruned by the server's retention rule: the last 10 by default, or a count, total size and
+   age set from the app or CLI (`.beacon/backup-retention.json`, left out of backups). It also
+   lists world archives backup mods leave in `*backup*` folders.
 5. Players with the companion mod get an in-game toast, can compare their version with the
    server's and pull configs/resource packs live (mods are staged for the next restart).
 

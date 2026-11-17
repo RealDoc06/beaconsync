@@ -198,6 +198,7 @@ export type ServerAction =
   | { kind: 'command'; arg: string }
   | { kind: 'start' | 'stop' | 'restart' | 'backup' }
   | { kind: 'restore' | 'delete_backup'; arg: string }
+  | { kind: 'set_retention'; arg: Retention }
   /** Update the server's `beacon` to this BeaconSync version. */
   | { kind: 'update'; arg: string }
 
@@ -213,12 +214,21 @@ export interface Backup {
   full: boolean
 }
 
+/** Which of BeaconSync's own backups a server keeps; past any limit the oldest go, the newest always stays. null = no limit. */
+export interface Retention {
+  keep: number | null
+  max_bytes: number | null
+  max_days: number | null
+}
+
 export interface ConsoleView {
   lines: string[]
   next: number
   backups: Backup[]
   online: boolean
   running: boolean
+  /** null until the server reports it; older servers can't change it. */
+  retention: Retention | null
 }
 
 export interface DeployResponse {

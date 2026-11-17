@@ -225,6 +225,8 @@ pub enum ServerAction {
     /// Restore a backup by id (stops and restarts Minecraft).
     Restore(String),
     DeleteBackup(String),
+    /// Change which of BeaconSync's own backups the server keeps; applied right away.
+    SetRetention(Retention),
     /// Update `beacon` itself to this BeaconSync version; Minecraft restarts.
     Update(String),
 }
@@ -244,6 +246,25 @@ pub struct Backup {
     pub full: bool,
 }
 
+/// Which of BeaconSync's own backups a server keeps. Checked after every new backup; past any
+/// limit the oldest go first, and the newest is always kept. Backup mods' archives are left to
+/// the mod. `None` means no limit.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Retention {
+    /// At most this many backups.
+    pub keep: Option<u32>,
+    /// At most this many bytes in total.
+    pub max_bytes: Option<u64>,
+    /// None older than this many days.
+    pub max_days: Option<u32>,
+}
+
+impl Default for Retention {
+    fn default() -> Self {
+        Self { keep: Some(10), max_bytes: None, max_days: None }
+    }
+}
+
 /// Console output and state an agent uploads.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AgentConsole {
@@ -252,6 +273,9 @@ pub struct AgentConsole {
     pub backups: Option<Vec<Backup>>,
     /// Whether Minecraft is running, when it changed.
     pub running: Option<bool>,
+    /// Sent with `backups`.
+    #[serde(default)]
+    pub retention: Option<Retention>,
 }
 
 /// A slice of a server's console for viewers. `next` is the cursor for the next call.
@@ -262,6 +286,9 @@ pub struct ConsoleView {
     pub backups: Vec<Backup>,
     pub online: bool,
     pub running: bool,
+    /// None until the agent reports it; older agents never do and can't take `SetRetention`.
+    #[serde(default)]
+    pub retention: Option<Retention>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

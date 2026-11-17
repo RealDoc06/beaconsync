@@ -12,8 +12,8 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use beacon_core::{
     api::{
-        AgentConsole, AgentReport, AgentTarget, DeployRequest, DeployTargets, NewServer, Pack, Release, Server, ServerAction,
-        ServerMode,
+        AgentConsole, AgentReport, AgentTarget, DeployRequest, DeployTargets, NewServer, Pack, Release, Retention, Server,
+        ServerAction, ServerMode,
     },
     fetch::{Fetcher, Progress},
     hash::short,
@@ -172,6 +172,16 @@ pub enum BackupCmd {
     },
     Delete {
         id: String,
+    },
+    /// Set which BeaconSync backups are kept; past any limit the oldest are deleted, the newest
+    /// always stays. Limits left out are off, e.g. `keep --last 5 --max-gb 5 --max-days 10`.
+    Keep {
+        #[arg(long)]
+        last: Option<u32>,
+        #[arg(long)]
+        max_gb: Option<f64>,
+        #[arg(long)]
+        max_days: Option<u32>,
     },
 }
 
@@ -925,8 +935,9 @@ async fn uploader(hub: Hub, mut rx: mpsc::UnboundedReceiver<String>) {
 async fn push_state(hub: &Option<Hub>, dir: &Path, running: bool) {
     let Some(h) = hub else { return };
     let d = dir.to_path_buf();
-    let backups = tokio::task::spawn_blocking(move || backups::list(&d)).await.unwrap_or_default();
-    let c = AgentConsole { lines: vec![], backups: Some(backups), running: Some(running) };
+    let (list, retention) =
+        tokio::task::spawn_blocking(move || (backups::list(&d), backups::retention(&d))).await.unwrap_or_default();
+    let c = AgentConsole { lines: vec![], backups: Some(list), running: Some(running), retention: Some(retention) };
     if let Err(e) = h.agent_console(&c).await {
         tracing::warn!("state upload failed: {e:#}");
     }
@@ -1230,6 +1241,19 @@ async fn supervise(dir: PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// E.g. "last 5, up to 5.0 GB, up to 10 days old".
+fn retention_text(r: &Retention) -> String {
+    let parts: Vec<String> = [
+        r.keep.map(|k| format!("last {k}")),
+        r.max_bytes.map(|b| format!("up to {}", size(b))),
+        r.max_days.map(|d| format!("up to {d} days old")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if parts.is_empty() { "all".into() } else { parts.join(", ") }
+}
+
 pub(crate) fn size(bytes: u64) -> String {
     match bytes {
         ..1_048_576 => format!("{} KB", bytes.div_ceil(1024)),
@@ -1318,6 +1342,11 @@ async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut O
         ServerAction::DeleteBackup(id) => {
             backups::delete(dir, &id)?;
             say(format!("deleted backup {id}"));
+        }
+        ServerAction::SetRetention(r) => {
+            let d = dir.to_path_buf();
+            tokio::task::spawn_blocking(move || backups::set_retention(&d, &r)).await??;
+            say(format!("backups kept: {}", retention_text(&r)));
         }
         ServerAction::Update(_) => unreachable!("handled by supervise"),
     }
@@ -1648,6 +1677,11 @@ async fn backups_cmd(t: Target, global_dir: Option<PathBuf>, action: Option<Back
             act_remote(t, global_dir, ServerAction::Restore(id), &["restored,"]).await
         }
         Some(BackupCmd::Delete { id }) => act_remote(t, global_dir, ServerAction::DeleteBackup(id), &["deleted backup"]).await,
+        Some(BackupCmd::Keep { last, max_gb, max_days }) => {
+            let max_bytes = max_gb.map(|g| (g * f64::from(1u32 << 30)) as u64);
+            let r = Retention { keep: last, max_bytes, max_days };
+            act_remote(t, global_dir, ServerAction::SetRetention(r), &["backups kept:"]).await
+        }
         None => {
             let (hub, server, _) = remote(t, global_dir).await?;
             let v = hub.console(&server.id, None, 0).await?;
@@ -1656,6 +1690,9 @@ async fn backups_cmd(t: Target, global_dir: Option<PathBuf>, action: Option<Back
             }
             if v.backups.is_empty() {
                 ui::info("No backups yet. Make one with `beacon server backups create`.");
+            }
+            if let Some(r) = &v.retention {
+                ui::info(format!("Keeping {} (change with `beacon server backups keep`)", retention_text(r)));
             }
             for b in &v.backups {
                 // The id is what `restore` takes; mod backups' notes are just their path.
