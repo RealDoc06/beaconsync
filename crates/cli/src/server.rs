@@ -12,8 +12,8 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use beacon_core::{
     api::{
-        AgentConsole, AgentReport, AgentTarget, DeployRequest, DeployTargets, NewServer, Pack, Release, Server, ServerAction,
-        ServerMode,
+        AgentConsole, AgentReport, AgentTarget, DeployRequest, DeployTargets, NewServer, Pack, Release, Retention, Server,
+        ServerAction, ServerMode,
     },
     fetch::{Fetcher, Progress},
     hash::short,
@@ -172,6 +172,17 @@ pub enum BackupCmd {
     },
     Delete {
         id: String,
+    },
+    /// Set which BeaconSync backups are kept; past any limit the oldest are deleted, the newest
+    /// always stays. Limits left out are off, e.g. `keep --last 5 --max-gb 5 --max-days 10`.
+    #[command(arg_required_else_help = true)]
+    Keep {
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        last: Option<u32>,
+        #[arg(long)]
+        max_gb: Option<f64>,
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+        max_days: Option<u32>,
     },
 }
 
@@ -925,8 +936,9 @@ async fn uploader(hub: Hub, mut rx: mpsc::UnboundedReceiver<String>) {
 async fn push_state(hub: &Option<Hub>, dir: &Path, running: bool) {
     let Some(h) = hub else { return };
     let d = dir.to_path_buf();
-    let backups = tokio::task::spawn_blocking(move || backups::list(&d)).await.unwrap_or_default();
-    let c = AgentConsole { lines: vec![], backups: Some(backups), running: Some(running) };
+    let (list, retention) =
+        tokio::task::spawn_blocking(move || (backups::list(&d), backups::retention(&d))).await.unwrap_or_default();
+    let c = AgentConsole { lines: vec![], backups: Some(list), running: Some(running), retention: Some(retention) };
     if let Err(e) = h.agent_console(&c).await {
         tracing::warn!("state upload failed: {e:#}");
     }
@@ -1030,12 +1042,16 @@ async fn wait_exit(mc: &mut Option<Mc>) -> std::io::Result<std::process::ExitSta
     }
 }
 
-/// Long polls the hub for deployments and owner actions.
-async fn agent_loop(hub: Hub, targets: mpsc::Sender<AgentTarget>, actions: mpsc::Sender<ServerAction>) {
+/// Long polls the hub for deployments and owner actions. When the hub lacks this server's state (it
+/// keeps it in memory, so after a restart), asks on `resync` for it to be sent again.
+async fn agent_loop(hub: Hub, targets: mpsc::Sender<AgentTarget>, actions: mpsc::Sender<ServerAction>, resync: mpsc::Sender<()>) {
     let mut last: Option<String> = None;
     loop {
         match hub.agent_poll(25, last.as_deref()).await {
             Ok(p) => {
+                if p.resync {
+                    resync.try_send(()).ok();
+                }
                 for a in p.actions {
                     if actions.send(a).await.is_err() {
                         return;
@@ -1154,8 +1170,9 @@ async fn supervise(dir: PathBuf) -> Result<()> {
 
     let (tx_target, mut targets) = mpsc::channel(1);
     let (tx_action, mut actions) = mpsc::channel(16);
+    let (tx_resync, mut resync) = mpsc::channel(1);
     if let Some(h) = agent.clone() {
-        tokio::spawn(agent_loop(h, tx_target, tx_action));
+        tokio::spawn(agent_loop(h, tx_target, tx_action, tx_resync));
     }
     let (tx_in, mut console) = mpsc::channel(16);
     #[cfg(unix)]
@@ -1164,6 +1181,9 @@ async fn supervise(dir: PathBuf) -> Result<()> {
     #[cfg(unix)]
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
+    // Age limits pass while nothing new is backed up; apply them on every start too.
+    let d = dir.clone();
+    tokio::task::spawn_blocking(move || backups::prune(&d)).await.ok();
     let mut mc = Some(Mc::start(&dir, &cfg)?);
     report(&agent, None, "running", format!("running {}", cfg.release_name.clone().unwrap_or_default()), cfg.commit.clone())
         .await;
@@ -1212,6 +1232,7 @@ async fn supervise(dir: PathBuf) -> Result<()> {
                 }
                 push_state(&agent, &dir, mc.is_some()).await;
             }
+            Some(()) = resync.recv() => push_state(&agent, &dir, mc.is_some()).await,
             Some(line) = console.recv() => {
                 if let Some(m) = mc.as_mut() {
                     m.send(&line).await;
@@ -1228,6 +1249,19 @@ async fn supervise(dir: PathBuf) -> Result<()> {
     report(&agent, None, "stopped", "server stopped", cfg.commit.clone()).await;
     push_state(&agent, &dir, false).await;
     Ok(())
+}
+
+/// E.g. "last 5, up to 5.0 GB, up to 10 days old".
+fn retention_text(r: &Retention) -> String {
+    let parts: Vec<String> = [
+        r.keep.map(|k| format!("last {k}")),
+        r.max_bytes.map(|b| format!("up to {}", size(b))),
+        r.max_days.map(|d| format!("up to {d} days old")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if parts.is_empty() { "all".into() } else { parts.join(", ") }
 }
 
 pub(crate) fn size(bytes: u64) -> String {
@@ -1318,6 +1352,11 @@ async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut O
         ServerAction::DeleteBackup(id) => {
             backups::delete(dir, &id)?;
             say(format!("deleted backup {id}"));
+        }
+        ServerAction::SetRetention(r) => {
+            let d = dir.to_path_buf();
+            tokio::task::spawn_blocking(move || backups::set_retention(&d, &r)).await??;
+            say(format!("backups kept: {}", retention_text(&r)));
         }
         ServerAction::Update(_) => unreachable!("handled by supervise"),
     }
@@ -1648,6 +1687,14 @@ async fn backups_cmd(t: Target, global_dir: Option<PathBuf>, action: Option<Back
             act_remote(t, global_dir, ServerAction::Restore(id), &["restored,"]).await
         }
         Some(BackupCmd::Delete { id }) => act_remote(t, global_dir, ServerAction::DeleteBackup(id), &["deleted backup"]).await,
+        Some(BackupCmd::Keep { last, max_gb, max_days }) => {
+            if max_gb.is_some_and(|g| !(g.is_finite() && g > 0.0)) {
+                bail!("--max-gb must be above 0");
+            }
+            let max_bytes = max_gb.map(|g| ((g * f64::from(1u32 << 30)) as u64).max(1));
+            let r = Retention { keep: last, max_bytes, max_days };
+            act_remote(t, global_dir, ServerAction::SetRetention(r), &["backups kept:"]).await
+        }
         None => {
             let (hub, server, _) = remote(t, global_dir).await?;
             let v = hub.console(&server.id, None, 0).await?;
@@ -1656,6 +1703,9 @@ async fn backups_cmd(t: Target, global_dir: Option<PathBuf>, action: Option<Back
             }
             if v.backups.is_empty() {
                 ui::info("No backups yet. Make one with `beacon server backups create`.");
+            }
+            if let Some(r) = &v.retention {
+                ui::info(format!("Keeping {} (change with `beacon server backups keep`)", retention_text(r)));
             }
             for b in &v.backups {
                 // The id is what `restore` takes; mod backups' notes are just their path.

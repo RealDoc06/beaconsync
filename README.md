@@ -56,7 +56,8 @@ More in [docs/screenshots](docs/screenshots).
   server warns players, stops cleanly, backs up, updates, restarts and reports back. A failed
   update rolls back automatically.
 - **Server management.** From the app or the CLI, on any machine: watch the live console and send
-  commands, start, stop and restart, and back up, restore or delete backups. Backups made by mods
+  commands, start, stop and restart, and back up, restore or delete backups (several at once, or
+  automatically past a count, size or age limit). Backups made by mods
   like FTB Backups or Simple Backups show up next to BeaconSync's own.
 - **Updates.** The app updates itself from GitHub releases (download, verify, restart) and
   updates `beacon` on your servers with one click: each server checks the new build, warns
@@ -133,6 +134,7 @@ beacon server console -s Survival            # live console, type commands; tab 
 beacon server cmd -s Survival whitelist add Steve
 beacon server backups -s Survival            # BeaconSync's and backup mods' (FTB Backups, Simple Backups...)
 beacon server backups -s Survival create | restore <id> | delete <id>
+beacon server backups -s Survival keep --last 5 --max-gb 5 --max-days 10   # limits left out are off
 beacon server stop | start | restart -s Survival
 beacon server switch "My Pack"     # on the server: follow another of your packs (world stays)
 beacon server rollback    # on the server, while it's stopped: back to the newest backup

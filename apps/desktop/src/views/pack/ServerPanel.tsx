@@ -3,11 +3,11 @@
 // so it works wherever the server runs.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Button, Empty, Tabs } from '../../components/ui'
+import { Button, Empty, Input, Tabs } from '../../components/ui'
 import { call } from '../../lib/api'
 import { ago } from '../../lib/format'
 import { askConfirm, useApp } from '../../lib/store'
-import type { Backup, ConsoleView, Server, ServerAction } from '../../lib/types'
+import type { Backup, ConsoleView, Retention, Server, ServerAction } from '../../lib/types'
 
 /** Lines kept in memory. */
 const KEEP = 5000
@@ -16,7 +16,15 @@ type Live = Omit<ConsoleView, 'next'> & { loaded: boolean; error: string | null 
 
 /** Long polls the server's console through the hub while mounted. */
 function useConsole(path: string, server: string): Live {
-  const [live, setLive] = useState<Live>({ lines: [], backups: [], online: false, running: false, loaded: false, error: null })
+  const [live, setLive] = useState<Live>({
+    lines: [],
+    backups: [],
+    online: false,
+    running: false,
+    retention: null,
+    loaded: false,
+    error: null,
+  })
   useEffect(() => {
     let alive = true
     let after: number | null = null
@@ -64,12 +72,15 @@ export function ServerPanel({
   const live = useConsole(path, server.id)
   const [tab, setTab] = useState<'console' | 'backups'>('console')
   const set = useApp((s) => s.set)
-  const send = async (action: ServerAction, done?: string) => {
+  /** Queues an action on the server; false (after showing why) when the hub refused it. */
+  const send: Send = async (action, done) => {
     try {
       await call('server_action', { path, server: server.id, action })
       if (done) set({ notice: { kind: 'ok', text: done } })
+      return true
     } catch (e) {
       set({ notice: { kind: 'error', text: e instanceof Error ? e.message : String(e) } })
+      return false
     }
   }
   const state = !live.loaded ? 'connecting' : !live.online ? 'offline' : live.running ? 'running' : 'stopped'
@@ -148,7 +159,7 @@ export function ServerPanel({
       {tab === 'console' ? (
         <Console lines={live.lines} disabled={!live.running} onSend={(c) => void send({ kind: 'command', arg: c })} />
       ) : (
-        <Backups backups={live.backups} online={live.online} send={send} />
+        <Backups backups={live.backups} retention={live.retention} online={live.online} send={send} />
       )}
     </div>
   )
@@ -235,7 +246,36 @@ function Console({ lines, disabled, onSend }: { lines: string[]; disabled: boole
   )
 }
 
-function Backups({ backups, online, send }: { backups: Backup[]; online: boolean; send: (a: ServerAction, done?: string) => Promise<void> }) {
+type Send = (a: ServerAction, done?: string) => Promise<boolean>
+
+const GB = 2 ** 30
+const DAY = 86_400
+const COLS = 'grid-cols-[16px_140px_120px_80px_110px_minmax(0,1fr)_auto]'
+
+const total = (bs: Backup[]) => bs.reduce((n, b) => n + b.size, 0)
+
+function Backups({
+  backups,
+  retention,
+  online,
+  send,
+}: {
+  backups: Backup[]
+  retention: Retention | null
+  online: boolean
+  send: Send
+}) {
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
+  // Ids can go stale as backups are pruned or deleted; only listed ones count.
+  const picked = backups.filter((b) => selected.has(b.id))
+  const all = backups.length > 0 && picked.length === backups.length
+  const flip = (id: string) =>
+    setSelected((s) => {
+      const next = new Set(s)
+      if (!next.delete(id)) next.add(id)
+      return next
+    })
+
   const restore = (b: Backup) =>
     askConfirm({
       title: 'Restore this backup?',
@@ -244,14 +284,23 @@ function Backups({ backups, online, send }: { backups: Backup[]; online: boolean
       danger: true,
       onConfirm: () => void send({ kind: 'restore', arg: b.id }, 'Restoring. Follow along in the console.'),
     })
-  const remove = (b: Backup) =>
+  const remove = (doomed: Backup[]) => {
+    const [one] = doomed
     askConfirm({
-      title: 'Delete this backup?',
-      body: `${b.source} backup from ${ago(b.created)} (${size(b.size)}). This can't be undone.`,
+      title: doomed.length === 1 ? 'Delete this backup?' : `Delete ${doomed.length} backups?`,
+      body: `${doomed.length === 1 && one ? `${one.source} backup from ${ago(one.created)} (${size(one.size)})` : `${size(total(doomed))} in total`}. This can't be undone.`,
       action: 'Delete',
       danger: true,
-      onConfirm: () => void send({ kind: 'delete_backup', arg: b.id }),
+      onConfirm: async () => {
+        // One action per backup: the server works through them in order. Stops at the first
+        // refusal (e.g. the server went offline), leaving the rest selected.
+        for (const b of doomed) {
+          if (!(await send({ kind: 'delete_backup', arg: b.id }))) return
+          setSelected((s) => new Set([...s].filter((id) => id !== b.id)))
+        }
+      },
     })
+  }
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
       <div className="flex items-center gap-2 px-5 py-3">
@@ -262,10 +311,52 @@ function Backups({ backups, online, send }: { backups: Backup[]; online: boolean
           Backups are also taken before every update. Backups made by mods like FTB Backups show up here too.
         </span>
       </div>
+      {retention && (
+        <RetentionRow
+          key={JSON.stringify(retention)}
+          retention={retention}
+          own={backups.filter((b) => b.full)}
+          online={online}
+          send={send}
+        />
+      )}
       <div className="border-t border-line">
         {backups.length === 0 && <Empty>{online ? 'No backups yet.' : 'The server is offline.'}</Empty>}
+        {backups.length > 0 && (
+          <div className={`grid h-9 ${COLS} items-center gap-3 border-b border-line px-5 text-xs text-muted`}>
+            <input
+              type="checkbox"
+              aria-label="Select all backups"
+              checked={all}
+              ref={(el) => {
+                if (el) el.indeterminate = picked.length > 0 && !all
+              }}
+              onChange={() => setSelected(new Set(all ? [] : backups.map((b) => b.id)))}
+              className="accent-[#7ee8ff]"
+            />
+            <span className="col-span-5">
+              {picked.length ? `${picked.length} selected · ${size(total(picked))}` : `${backups.length} backups · ${size(total(backups))}`}
+            </span>
+            <span className="flex gap-1.5">
+              {picked.length > 0 && (
+                <>
+                  <Button small variant="ghost" onClick={() => setSelected(new Set())}>
+                    Clear
+                  </Button>
+                  <Button small variant="danger" disabled={!online} onClick={() => remove(picked)}>
+                    Delete {picked.length}
+                  </Button>
+                </>
+              )}
+            </span>
+          </div>
+        )}
         {backups.map((b) => (
-          <div key={b.id} className="grid h-11 grid-cols-[140px_120px_80px_110px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line px-5">
+          <label
+            key={b.id}
+            className={`grid h-11 ${COLS} items-center gap-3 border-b border-line px-5 ${selected.has(b.id) ? 'bg-hover' : ''}`}
+          >
+            <input type="checkbox" checked={selected.has(b.id)} onChange={() => flip(b.id)} className="accent-[#7ee8ff]" />
             <span className="truncate font-medium">{b.source}</span>
             <span className="text-muted" title={new Date(b.created * 1000).toLocaleString()}>
               {ago(b.created)}
@@ -279,13 +370,102 @@ function Backups({ backups, online, send }: { backups: Backup[]; online: boolean
               <Button small disabled={!online} onClick={() => restore(b)}>
                 Restore
               </Button>
-              <Button small variant="danger" disabled={!online} onClick={() => remove(b)}>
+              <Button small variant="danger" disabled={!online} onClick={() => remove([b])}>
                 Delete
               </Button>
             </span>
-          </div>
+          </label>
         ))}
       </div>
     </div>
+  )
+}
+
+/** Parses one limit field: null when empty (no limit), undefined when invalid. Counts and days
+ *  are whole numbers that fit a u32; sizes are GB and become bytes. */
+function limit(text: string, unit: 'count' | 'gb'): number | null | undefined {
+  if (!text.trim()) return null
+  const n = Number(text)
+  if (unit === 'gb') return n > 0 && n * GB <= Number.MAX_SAFE_INTEGER ? Math.max(1, Math.round(n * GB)) : undefined
+  return Number.isInteger(n) && n >= 1 && n <= 2 ** 32 - 1 ? n : undefined
+}
+
+/** How many of `own` (BeaconSync backups, newest first) `r` keeps. Mirrors `kept` in crates/cli/src/backups.rs. */
+function kept(own: Backup[], r: Retention, now: number) {
+  let bytes = 0
+  const first = own.findIndex((b, i) => {
+    bytes += b.size
+    return (
+      i > 0 &&
+      ((r.keep !== null && i >= r.keep) ||
+        (r.max_bytes !== null && bytes > r.max_bytes) ||
+        (r.max_days !== null && now - b.created > r.max_days * DAY))
+    )
+  })
+  return first < 0 ? own.length : first
+}
+
+const draftOf = (r: Retention) => ({
+  keep: r.keep?.toString() ?? '',
+  gb: r.max_bytes === null ? '' : String(Math.round((r.max_bytes / GB) * 100) / 100),
+  days: r.max_days?.toString() ?? '',
+})
+
+/** The server's retention rule as three editable limits. Remounted (via key) when the server reports a new one. */
+function RetentionRow({ retention, own, online, send }: { retention: Retention; own: Backup[]; online: boolean; send: Send }) {
+  const saved = draftOf(retention)
+  const [draft, setDraft] = useState(saved)
+  // An untouched size keeps its exact bytes; the field only shows it rounded.
+  const parsed = {
+    keep: limit(draft.keep, 'count'),
+    max_bytes: draft.gb === saved.gb ? retention.max_bytes : limit(draft.gb, 'gb'),
+    max_days: limit(draft.days, 'count'),
+  }
+  const { keep, max_bytes, max_days } = parsed
+  const next: Retention | null =
+    keep !== undefined && max_bytes !== undefined && max_days !== undefined ? { keep, max_bytes, max_days } : null
+  const dirty = draft.keep !== saved.keep || draft.gb !== saved.gb || draft.days !== saved.days
+  const save = (r: Retention) => {
+    const doomed = own.slice(kept(own, r, Date.now() / 1000))
+    const go = () => void send({ kind: 'set_retention', arg: r }, 'Saved')
+    if (!doomed.length) return go()
+    askConfirm({
+      title: `Delete ${doomed.length} backup${doomed.length === 1 ? '' : 's'} now?`,
+      body: `They are past the new limits (${size(total(doomed))}). This can't be undone.`,
+      action: 'Save and delete',
+      danger: true,
+      onConfirm: go,
+    })
+  }
+  const field = (key: keyof typeof draft, value: keyof typeof parsed, label: string, unit: string) => (
+    <label className="flex items-center gap-1.5">
+      <span>{label}</span>
+      <Input
+        inputMode="decimal"
+        value={draft[key]}
+        placeholder="any"
+        onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+        className={`h-6! w-14 px-1.5! text-right text-xs ${parsed[value] === undefined ? 'border-bad!' : ''}`}
+      />
+      <span>{unit}</span>
+    </label>
+  )
+  return (
+    <form
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 pb-3 text-xs text-muted"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (next && dirty) save(next)
+      }}
+    >
+      <span className="font-medium text-fg">Keep</span>
+      {field('keep', 'keep', 'last', 'backups')}
+      {field('gb', 'max_bytes', 'up to', 'GB')}
+      {field('days', 'max_days', 'up to', 'days old')}
+      <Button small type="submit" disabled={!online || !dirty || !next}>
+        Save
+      </Button>
+      <span>Oldest BeaconSync backups go first; the newest always stays.</span>
+    </form>
   )
 }

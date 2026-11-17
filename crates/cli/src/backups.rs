@@ -4,15 +4,15 @@
 //! Ids are paths relative to the server folder, and only ids from [`list`] are acted on.
 
 use anyhow::{Context, Result, bail};
-use beacon_core::{api::Backup, server as srv};
+use beacon_core::{
+    api::{Backup, Retention},
+    server as srv,
+};
 use std::{
     fs,
     path::{Path, PathBuf},
     time::UNIX_EPOCH,
 };
-
-/// BeaconSync backups kept; older ones are pruned after each new one.
-const KEEP: usize = 10;
 
 /// Backup mods by a piece of their jar name, for labels.
 const MODS: &[(&str, &str)] = &[
@@ -29,6 +29,24 @@ const MODS: &[(&str, &str)] = &[
 
 fn own_dir(server: &Path) -> PathBuf {
     server.join(".beacon/backups")
+}
+
+/// Kept apart from `server.json` and left out of backups (see [`skip`]), so restoring an older
+/// backup doesn't bring back an older rule.
+fn retention_path(server: &Path) -> PathBuf {
+    server.join(".beacon/backup-retention.json")
+}
+
+/// The server's retention rule; the default until the owner sets one.
+pub fn retention(server: &Path) -> Retention {
+    fs::read(retention_path(server)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Saves the rule and prunes by it right away.
+pub fn set_retention(server: &Path, r: &Retention) -> Result<()> {
+    beacon_core::store::write_atomic(&retention_path(server), &serde_json::to_vec_pretty(r)?)?;
+    prune(server);
+    Ok(())
 }
 
 fn is_archive(name: &str) -> bool {
@@ -127,7 +145,8 @@ fn find(server: &Path, id: &str) -> Result<Backup> {
     list(server).into_iter().find(|b| b.id == id).with_context(|| format!("no backup {id}"))
 }
 
-/// Left out of BeaconSync backups: caches, logs, other backups and files being written.
+/// Left out of BeaconSync backups: caches, logs, other backups (and their retention rule) and
+/// files being written.
 /// `world` is the world folder, always kept even if its name contains "backup".
 fn skip(server: &Path, world: &str, rel: &Path) -> bool {
     let s = rel.to_string_lossy();
@@ -170,13 +189,29 @@ pub fn create(server: &Path, note: &str) -> Result<Backup> {
     find(server, &rel(server, &dir.join(name)))
 }
 
-/// Keeps the newest BeaconSync backups. Separate from [`create`] so a restore can take a safety
-/// backup without pruning the one it is about to restore.
+/// Deletes the BeaconSync backups past the server's [`retention`]. Separate from [`create`] so a
+/// restore can take a safety backup without pruning the one it is about to restore.
 pub fn prune(server: &Path) {
-    let mut own: Vec<Backup> = list(server).into_iter().filter(|b| b.full).collect();
-    for old in own.split_off(KEEP.min(own.len())) {
+    let own: Vec<Backup> = list(server).into_iter().filter(|b| b.full).collect();
+    for old in &own[kept(&own, &retention(server), beacon_core::now())..] {
         fs::remove_file(server.join(&old.id)).ok();
     }
+}
+
+/// How many of `own` (newest first) `r` keeps. Each limit only grows more exceeded going back
+/// in time, so everything from the first backup past one is dropped. The newest always stays.
+fn kept(own: &[Backup], r: &Retention, now: i64) -> usize {
+    let mut total = 0;
+    own.iter()
+        .enumerate()
+        .position(|(i, b)| {
+            total += b.size;
+            i > 0
+                && (r.keep.is_some_and(|k| i >= k as usize)
+                    || r.max_bytes.is_some_and(|m| total > m)
+                    || r.max_days.is_some_and(|d| now - b.created > i64::from(d) * 86_400))
+        })
+        .unwrap_or(own.len())
 }
 
 /// The newest BeaconSync backup, e.g. the one taken before the last update.
@@ -308,6 +343,44 @@ mod tests {
         // Partial archives from incremental backups are refused rather than half restored.
         fs::copy(d.join("backups/2026-11-05.zip"), d.join("backups/incremental.zip")).unwrap();
         assert!(restore(&d, "backups/incremental.zip").is_err());
+        fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn retention_drops_the_oldest_past_any_limit_but_keeps_the_newest() {
+        const DAY: i64 = 86_400;
+        let gb = 1 << 30;
+        // Newest first: 1, 2, 3... days old, 1 GB each.
+        let own: Vec<Backup> = (1..=6)
+            .map(|d| Backup {
+                id: d.to_string(),
+                source: "BeaconSync".into(),
+                note: String::new(),
+                size: gb,
+                created: -d * DAY,
+                full: true,
+            })
+            .collect();
+        let r = |keep, gbs: Option<u64>, max_days| Retention { keep, max_bytes: gbs.map(|g| g * gb), max_days };
+        assert_eq!(kept(&own, &r(None, None, None), 0), 6);
+        assert_eq!(kept(&own, &r(Some(5), None, None), 0), 5);
+        assert_eq!(kept(&own, &r(None, Some(3), None), 0), 3);
+        assert_eq!(kept(&own, &r(None, None, Some(4)), 0), 4);
+        assert_eq!(kept(&own, &r(Some(5), Some(4), Some(2)), 0), 2);
+        assert_eq!(kept(&own, &r(Some(0), Some(0), Some(0)), 0), 1);
+    }
+
+    #[test]
+    fn retention_is_applied_and_survives_a_restore() {
+        let d = server();
+        create(&d, "one").unwrap();
+        set_retention(&d, &Retention { keep: Some(5), max_bytes: None, max_days: None }).unwrap();
+        create(&d, "two").unwrap();
+        set_retention(&d, &Retention { keep: Some(1), max_bytes: None, max_days: None }).unwrap();
+        assert_eq!(list(&d).len(), 1);
+        // Restoring a backup taken under keep 5 leaves keep 1 in place.
+        restore(&d, &list(&d)[0].id).unwrap();
+        assert_eq!(retention(&d).keep, Some(1));
         fs::remove_dir_all(d).ok();
     }
 }

@@ -209,7 +209,8 @@ async fn console_and_actions_are_relayed_between_owner_and_server() {
         .await
         .unwrap();
     let (sid, agent) = (created.server.id.clone(), Hub::new(&base, Some(created.token)));
-    agent.agent_poll(0, None).await.unwrap();
+    // The hub has nothing from the agent yet (as after a hub restart), so it asks for its state.
+    assert!(agent.agent_poll(0, None).await.unwrap().resync);
 
     let backup = Backup {
         id: "backups/a.zip".into(),
@@ -224,11 +225,13 @@ async fn console_and_actions_are_relayed_between_owner_and_server() {
             lines: vec!["Done (3.2s)!".into()],
             backups: Some(vec![backup.clone()]),
             running: Some(true),
+            retention: None,
         })
         .await
         .unwrap();
     let v = owner.console(&sid, None, 0).await.unwrap();
     assert_eq!((v.lines, v.backups, v.running, v.next), (vec!["Done (3.2s)!".to_string()], vec![backup], true, 1));
+    assert!(!agent.agent_poll(0, None).await.unwrap().resync);
 
     // A viewer waiting after the cursor is woken by the next line.
     let waiting = tokio::spawn({
@@ -251,6 +254,17 @@ async fn console_and_actions_are_relayed_between_owner_and_server() {
     let p = tokio::time::timeout(Duration::from_secs(3), polling).await.unwrap().unwrap();
     assert_eq!(p.actions, vec![ServerAction::Command("list".into())]);
     assert!(agent.agent_poll(0, None).await.unwrap().actions.is_empty());
+
+    // Retention changes only go to agents that report a rule, as older ones can't read them.
+    let keep = ServerAction::SetRetention(Retention { keep: Some(3), ..Default::default() });
+    assert!(owner.server_action(&sid, &keep).await.is_err());
+    let report = AgentConsole { backups: Some(vec![]), retention: Some(Retention::default()), ..Default::default() };
+    agent.agent_console(&report).await.unwrap();
+    assert_eq!(owner.console(&sid, None, 0).await.unwrap().retention, Some(Retention::default()));
+    let zero = ServerAction::SetRetention(Retention { keep: Some(0), ..Default::default() });
+    assert!(owner.server_action(&sid, &zero).await.is_err());
+    owner.server_action(&sid, &keep).await.unwrap();
+    assert_eq!(agent.agent_poll(0, None).await.unwrap().actions, vec![keep]);
 
     // Only the owner can watch or control the server.
     assert!(other.console(&sid, None, 0).await.is_err());
