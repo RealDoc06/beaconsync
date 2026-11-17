@@ -163,7 +163,7 @@ Server agent (server token):
 
 ```
 GET  /api/agent/poll?wait=25&known=<deployment>
-                               -> { target: { commit, release, deployment } | null, actions: [...] }   (long poll)
+                               -> { target: { commit, release, deployment } | null, actions: [...], resync }   (long poll; resync = hub wants backups and state again)
 POST /api/agent/report         { deployment, status: "applying|done|failed|running|stopped|rolledback", message, commit, agent }
 POST /api/agent/console        { lines, backups?, running?, retention? }
 ```
