@@ -72,12 +72,15 @@ export function ServerPanel({
   const live = useConsole(path, server.id)
   const [tab, setTab] = useState<'console' | 'backups'>('console')
   const set = useApp((s) => s.set)
-  const send = async (action: ServerAction, done?: string) => {
+  /** Queues an action on the server; false (after showing why) when the hub refused it. */
+  const send: Send = async (action, done) => {
     try {
       await call('server_action', { path, server: server.id, action })
       if (done) set({ notice: { kind: 'ok', text: done } })
+      return true
     } catch (e) {
       set({ notice: { kind: 'error', text: e instanceof Error ? e.message : String(e) } })
+      return false
     }
   }
   const state = !live.loaded ? 'connecting' : !live.online ? 'offline' : live.running ? 'running' : 'stopped'
@@ -243,10 +246,13 @@ function Console({ lines, disabled, onSend }: { lines: string[]; disabled: boole
   )
 }
 
-type Send = (a: ServerAction, done?: string) => Promise<void>
+type Send = (a: ServerAction, done?: string) => Promise<boolean>
 
 const GB = 2 ** 30
+const DAY = 86_400
 const COLS = 'grid-cols-[16px_140px_120px_80px_110px_minmax(0,1fr)_auto]'
+
+const total = (bs: Backup[]) => bs.reduce((n, b) => n + b.size, 0)
 
 function Backups({
   backups,
@@ -263,8 +269,6 @@ function Backups({
   // Ids can go stale as backups are pruned or deleted; only listed ones count.
   const picked = backups.filter((b) => selected.has(b.id))
   const all = backups.length > 0 && picked.length === backups.length
-  const shown = picked.length ? picked : backups
-  const total = shown.reduce((n, b) => n + b.size, 0)
   const flip = (id: string) =>
     setSelected((s) => {
       const next = new Set(s)
@@ -282,16 +286,18 @@ function Backups({
     })
   const remove = (doomed: Backup[]) => {
     const [one] = doomed
-    const bytes = size(doomed.reduce((n, b) => n + b.size, 0))
     askConfirm({
       title: doomed.length === 1 ? 'Delete this backup?' : `Delete ${doomed.length} backups?`,
-      body: `${doomed.length === 1 && one ? `${one.source} backup from ${ago(one.created)}` : 'Together'} (${bytes}). This can't be undone.`,
+      body: `${doomed.length === 1 && one ? `${one.source} backup from ${ago(one.created)} (${size(one.size)})` : `${size(total(doomed))} in total`}. This can't be undone.`,
       action: 'Delete',
       danger: true,
       onConfirm: async () => {
-        // One action per backup: the server works through them in order.
-        for (const b of doomed) await send({ kind: 'delete_backup', arg: b.id })
-        setSelected(new Set())
+        // One action per backup: the server works through them in order. Stops at the first
+        // refusal (e.g. the server went offline), leaving the rest selected.
+        for (const b of doomed) {
+          if (!(await send({ kind: 'delete_backup', arg: b.id }))) return
+          setSelected((s) => new Set([...s].filter((id) => id !== b.id)))
+        }
       },
     })
   }
@@ -305,7 +311,15 @@ function Backups({
           Backups are also taken before every update. Backups made by mods like FTB Backups show up here too.
         </span>
       </div>
-      {retention && <RetentionRow key={JSON.stringify(retention)} retention={retention} online={online} send={send} />}
+      {retention && (
+        <RetentionRow
+          key={JSON.stringify(retention)}
+          retention={retention}
+          own={backups.filter((b) => b.full)}
+          online={online}
+          send={send}
+        />
+      )}
       <div className="border-t border-line">
         {backups.length === 0 && <Empty>{online ? 'No backups yet.' : 'The server is offline.'}</Empty>}
         {backups.length > 0 && (
@@ -321,7 +335,7 @@ function Backups({
               className="accent-[#7ee8ff]"
             />
             <span className="col-span-5">
-              {picked.length ? `${picked.length} selected` : `${backups.length} backups`} · {size(total)}
+              {picked.length ? `${picked.length} selected · ${size(total(picked))}` : `${backups.length} backups · ${size(total(backups))}`}
             </span>
             <span className="flex gap-1.5">
               {picked.length > 0 && (
@@ -367,29 +381,63 @@ function Backups({
   )
 }
 
-/** Empty = no limit; anything else must be a positive number. */
-function limit(text: string, scale = 1): number | null | undefined {
+/** Parses one limit field: null when empty (no limit), undefined when invalid. Counts and days
+ *  are whole numbers that fit a u32; sizes are GB and become bytes. */
+function limit(text: string, unit: 'count' | 'gb'): number | null | undefined {
   if (!text.trim()) return null
   const n = Number(text)
-  return n > 0 ? Math.round(n * scale) : undefined
+  if (unit === 'gb') return Number.isFinite(n) && n > 0 ? Math.max(1, Math.round(n * GB)) : undefined
+  return Number.isInteger(n) && n >= 1 && n <= 2 ** 32 - 1 ? n : undefined
+}
+
+/** How many of `own` (BeaconSync backups, newest first) `r` keeps. Mirrors `kept` in crates/cli/src/backups.rs. */
+function kept(own: Backup[], r: Retention, now: number) {
+  let bytes = 0
+  const first = own.findIndex((b, i) => {
+    bytes += b.size
+    return (
+      i > 0 &&
+      ((r.keep !== null && i >= r.keep) ||
+        (r.max_bytes !== null && bytes > r.max_bytes) ||
+        (r.max_days !== null && now - b.created > r.max_days * DAY))
+    )
+  })
+  return first < 0 ? own.length : first
 }
 
 const draftOf = (r: Retention) => ({
   keep: r.keep?.toString() ?? '',
-  gb: r.max_bytes === null ? '' : String(Math.round((r.max_bytes / GB) * 10) / 10),
+  gb: r.max_bytes === null ? '' : String(Math.round((r.max_bytes / GB) * 100) / 100),
   days: r.max_days?.toString() ?? '',
 })
 
 /** The server's retention rule as three editable limits. Remounted (via key) when the server reports a new one. */
-function RetentionRow({ retention, online, send }: { retention: Retention; online: boolean; send: Send }) {
+function RetentionRow({ retention, own, online, send }: { retention: Retention; own: Backup[]; online: boolean; send: Send }) {
   const saved = draftOf(retention)
   const [draft, setDraft] = useState(saved)
-  const [keep, max_bytes, max_days] = [limit(draft.keep), limit(draft.gb, GB), limit(draft.days)]
+  // An untouched size keeps its exact bytes; the field only shows it rounded.
+  const parsed = {
+    keep: limit(draft.keep, 'count'),
+    max_bytes: draft.gb === saved.gb ? retention.max_bytes : limit(draft.gb, 'gb'),
+    max_days: limit(draft.days, 'count'),
+  }
+  const { keep, max_bytes, max_days } = parsed
   const next: Retention | null =
     keep !== undefined && max_bytes !== undefined && max_days !== undefined ? { keep, max_bytes, max_days } : null
-  // Compared as typed, so a size set from the CLI that shows rounded isn't a change by itself.
   const dirty = draft.keep !== saved.keep || draft.gb !== saved.gb || draft.days !== saved.days
-  const field = (key: keyof typeof draft, label: string, unit: string) => (
+  const save = (r: Retention) => {
+    const doomed = own.slice(kept(own, r, Date.now() / 1000))
+    const go = () => void send({ kind: 'set_retention', arg: r }, 'Saved')
+    if (!doomed.length) return go()
+    askConfirm({
+      title: `Delete ${doomed.length} backup${doomed.length === 1 ? '' : 's'} now?`,
+      body: `They are past the new limits (${size(total(doomed))}). This can't be undone.`,
+      action: 'Save and delete',
+      danger: true,
+      onConfirm: go,
+    })
+  }
+  const field = (key: keyof typeof draft, value: keyof typeof parsed, label: string, unit: string) => (
     <label className="flex items-center gap-1.5">
       <span>{label}</span>
       <Input
@@ -397,7 +445,7 @@ function RetentionRow({ retention, online, send }: { retention: Retention; onlin
         value={draft[key]}
         placeholder="any"
         onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-        className={`h-6 w-14 text-right text-xs ${limit(draft[key]) === undefined ? 'border-bad' : ''}`}
+        className={`h-6! w-14 px-1.5! text-right text-xs ${parsed[value] === undefined ? 'border-bad!' : ''}`}
       />
       <span>{unit}</span>
     </label>
@@ -407,13 +455,13 @@ function RetentionRow({ retention, online, send }: { retention: Retention; onlin
       className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 pb-3 text-xs text-muted"
       onSubmit={(e) => {
         e.preventDefault()
-        if (next && dirty) void send({ kind: 'set_retention', arg: next }, 'Saved. Backups past the limits are deleted.')
+        if (next && dirty) save(next)
       }}
     >
       <span className="font-medium text-fg">Keep</span>
-      {field('keep', 'last', 'backups')}
-      {field('gb', 'up to', 'GB')}
-      {field('days', 'up to', 'days old')}
+      {field('keep', 'keep', 'last', 'backups')}
+      {field('gb', 'max_bytes', 'up to', 'GB')}
+      {field('days', 'max_days', 'up to', 'days old')}
       <Button small type="submit" disabled={!online || !dirty || !next}>
         Save
       </Button>

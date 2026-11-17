@@ -259,6 +259,8 @@ async fn console_and_actions_are_relayed_between_owner_and_server() {
     let report = AgentConsole { backups: Some(vec![]), retention: Some(Retention::default()), ..Default::default() };
     agent.agent_console(&report).await.unwrap();
     assert_eq!(owner.console(&sid, None, 0).await.unwrap().retention, Some(Retention::default()));
+    let zero = ServerAction::SetRetention(Retention { keep: Some(0), ..Default::default() });
+    assert!(owner.server_action(&sid, &zero).await.is_err());
     owner.server_action(&sid, &keep).await.unwrap();
     assert_eq!(agent.agent_poll(0, None).await.unwrap().actions, vec![keep]);
 

@@ -175,12 +175,13 @@ pub enum BackupCmd {
     },
     /// Set which BeaconSync backups are kept; past any limit the oldest are deleted, the newest
     /// always stays. Limits left out are off, e.g. `keep --last 5 --max-gb 5 --max-days 10`.
+    #[command(arg_required_else_help = true)]
     Keep {
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
         last: Option<u32>,
         #[arg(long)]
         max_gb: Option<f64>,
-        #[arg(long)]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
         max_days: Option<u32>,
     },
 }
@@ -1175,6 +1176,9 @@ async fn supervise(dir: PathBuf) -> Result<()> {
     #[cfg(unix)]
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
+    // Age limits pass while nothing new is backed up; apply them on every start too.
+    let d = dir.clone();
+    tokio::task::spawn_blocking(move || backups::prune(&d)).await.ok();
     let mut mc = Some(Mc::start(&dir, &cfg)?);
     report(&agent, None, "running", format!("running {}", cfg.release_name.clone().unwrap_or_default()), cfg.commit.clone())
         .await;
@@ -1678,7 +1682,10 @@ async fn backups_cmd(t: Target, global_dir: Option<PathBuf>, action: Option<Back
         }
         Some(BackupCmd::Delete { id }) => act_remote(t, global_dir, ServerAction::DeleteBackup(id), &["deleted backup"]).await,
         Some(BackupCmd::Keep { last, max_gb, max_days }) => {
-            let max_bytes = max_gb.map(|g| (g * f64::from(1u32 << 30)) as u64);
+            if max_gb.is_some_and(|g| !(g.is_finite() && g > 0.0)) {
+                bail!("--max-gb must be above 0");
+            }
+            let max_bytes = max_gb.map(|g| ((g * f64::from(1u32 << 30)) as u64).max(1));
             let r = Retention { keep: last, max_bytes, max_days };
             act_remote(t, global_dir, ServerAction::SetRetention(r), &["backups kept:"]).await
         }

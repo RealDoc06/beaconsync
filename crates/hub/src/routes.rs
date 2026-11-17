@@ -769,9 +769,15 @@ async fn server_action(
     if matches!(a, ServerAction::Update(_)) && server.agent_version.is_none() {
         return Err(Error::bad("this server's beacon is too old to update itself; run `beacon server install` on it again"));
     }
-    // Agents that don't report a retention rule predate it and would fail to read the action.
-    if matches!(a, ServerAction::SetRetention(_)) && s.console(&sid, |c| c.retention.is_none()) {
-        return Err(Error::bad("this server's beacon is too old to change backup retention; update it first"));
+    if let ServerAction::SetRetention(r) = &a {
+        // Agents that don't report a rule predate it and would fail to read the action. A current
+        // one may just not have reported yet since a hub restart.
+        if s.console(&sid, |c| c.retention.is_none()) {
+            return Err(Error::bad("this server hasn't reported its backup retention; its beacon may need updating"));
+        }
+        if [r.keep.map(u64::from), r.max_bytes, r.max_days.map(u64::from)].contains(&Some(0)) {
+            return Err(Error::bad("retention limits must be above 0"));
+        }
     }
     if let ServerAction::Command(c) = &a
         && (c.trim().is_empty() || c.contains('\n'))
