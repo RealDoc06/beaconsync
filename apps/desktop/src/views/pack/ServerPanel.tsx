@@ -386,7 +386,7 @@ function Backups({
 function limit(text: string, unit: 'count' | 'gb'): number | null | undefined {
   if (!text.trim()) return null
   const n = Number(text)
-  if (unit === 'gb') return Number.isFinite(n) && n > 0 ? Math.max(1, Math.round(n * GB)) : undefined
+  if (unit === 'gb') return n > 0 && n * GB <= Number.MAX_SAFE_INTEGER ? Math.max(1, Math.round(n * GB)) : undefined
   return Number.isInteger(n) && n >= 1 && n <= 2 ** 32 - 1 ? n : undefined
 }
 

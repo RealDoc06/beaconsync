@@ -209,7 +209,8 @@ async fn console_and_actions_are_relayed_between_owner_and_server() {
         .await
         .unwrap();
     let (sid, agent) = (created.server.id.clone(), Hub::new(&base, Some(created.token)));
-    agent.agent_poll(0, None).await.unwrap();
+    // The hub has nothing from the agent yet (as after a hub restart), so it asks for its state.
+    assert!(agent.agent_poll(0, None).await.unwrap().resync);
 
     let backup = Backup {
         id: "backups/a.zip".into(),
@@ -230,6 +231,7 @@ async fn console_and_actions_are_relayed_between_owner_and_server() {
         .unwrap();
     let v = owner.console(&sid, None, 0).await.unwrap();
     assert_eq!((v.lines, v.backups, v.running, v.next), (vec!["Done (3.2s)!".to_string()], vec![backup], true, 1));
+    assert!(!agent.agent_poll(0, None).await.unwrap().resync);
 
     // A viewer waiting after the cursor is woken by the next line.
     let waiting = tokio::spawn({

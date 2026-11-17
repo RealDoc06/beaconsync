@@ -209,6 +209,9 @@ pub struct AgentPoll {
     /// Things the owner asked for from the app or CLI, oldest first.
     #[serde(default)]
     pub actions: Vec<ServerAction>,
+    /// The hub has no backups or state from this agent yet, e.g. after the hub restarted: send them.
+    #[serde(default)]
+    pub resync: bool,
 }
 
 /// What an owner can ask a running server to do. Relayed by the hub to the agent.
@@ -246,9 +249,9 @@ pub struct Backup {
     pub full: bool,
 }
 
-/// Which of BeaconSync's own backups a server keeps. Checked after every new backup; past any
-/// limit the oldest go first, and the newest is always kept. Backup mods' archives are left to
-/// the mod. `None` means no limit.
+/// Which of BeaconSync's own backups a server keeps. Applied after every new backup, on start and
+/// when set; past any limit the oldest go first, and the newest is always kept. Backup mods'
+/// archives are left to the mod. `None` means no limit.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Retention {
     /// At most this many backups.

@@ -1043,11 +1043,16 @@ async fn wait_exit(mc: &mut Option<Mc>) -> std::io::Result<std::process::ExitSta
 }
 
 /// Long polls the hub for deployments and owner actions.
-async fn agent_loop(hub: Hub, targets: mpsc::Sender<AgentTarget>, actions: mpsc::Sender<ServerAction>) {
+/// Long polls the hub for deployments and actions. When the hub lacks this server's state (it
+/// keeps it in memory, so after a restart), asks on `resync` for it to be sent again.
+async fn agent_loop(hub: Hub, targets: mpsc::Sender<AgentTarget>, actions: mpsc::Sender<ServerAction>, resync: mpsc::Sender<()>) {
     let mut last: Option<String> = None;
     loop {
         match hub.agent_poll(25, last.as_deref()).await {
             Ok(p) => {
+                if p.resync {
+                    resync.try_send(()).ok();
+                }
                 for a in p.actions {
                     if actions.send(a).await.is_err() {
                         return;
@@ -1166,8 +1171,9 @@ async fn supervise(dir: PathBuf) -> Result<()> {
 
     let (tx_target, mut targets) = mpsc::channel(1);
     let (tx_action, mut actions) = mpsc::channel(16);
+    let (tx_resync, mut resync) = mpsc::channel(1);
     if let Some(h) = agent.clone() {
-        tokio::spawn(agent_loop(h, tx_target, tx_action));
+        tokio::spawn(agent_loop(h, tx_target, tx_action, tx_resync));
     }
     let (tx_in, mut console) = mpsc::channel(16);
     #[cfg(unix)]
@@ -1227,6 +1233,7 @@ async fn supervise(dir: PathBuf) -> Result<()> {
                 }
                 push_state(&agent, &dir, mc.is_some()).await;
             }
+            Some(()) = resync.recv() => push_state(&agent, &dir, mc.is_some()).await,
             Some(line) = console.recv() => {
                 if let Some(m) = mc.as_mut() {
                     m.send(&line).await;

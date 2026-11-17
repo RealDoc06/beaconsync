@@ -51,6 +51,8 @@ struct Console {
     backups: Vec<Backup>,
     running: bool,
     retention: Option<Retention>,
+    /// Whether the agent sent its backups since the hub started.
+    reported: bool,
     actions: Vec<ServerAction>,
     /// Wakes viewers waiting for new lines.
     changed: Arc<Notify>,
@@ -625,9 +627,9 @@ fn agent_state(s: &AppState, srv: &AuthServer, known: Option<&str>) -> Result<(A
         _ => None,
     };
     drop(db);
-    let actions = s.console(&srv.id, |c| std::mem::take(&mut c.actions));
+    let (actions, resync) = s.console(&srv.id, |c| (std::mem::take(&mut c.actions), !c.reported));
     let has = target.as_ref().is_some_and(|t| Some(t.deployment.as_str()) != known) || !actions.is_empty();
-    Ok((AgentPoll { target, server, pack_code: code, actions }, has))
+    Ok((AgentPoll { target, server, pack_code: code, actions, resync }, has))
 }
 
 async fn agent_poll(State(s): State<AppState>, srv: AuthServer, Query(q): Query<PollQuery>) -> Result<Json<AgentPoll>> {
@@ -690,6 +692,7 @@ async fn agent_console(State(s): State<AppState>, srv: AuthServer, Json(c): Json
         if let Some(b) = c.backups {
             con.backups = b;
             con.retention = c.retention;
+            con.reported = true;
         }
         if let Some(r) = c.running {
             con.running = r;
