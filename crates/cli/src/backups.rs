@@ -173,9 +173,11 @@ pub fn create(server: &Path, note: &str) -> Result<Backup> {
     let name = format!("{}-{}.tar.gz", beacon_core::now(), slug.trim_matches('-'));
     let tmp = dir.join(format!("{name}.part"));
     {
-        // Owner-only on Unix: the archive holds `.beacon/server.json` and its hub token.
+        // Owner-only on Unix: the archive holds `.beacon/server.json` and its hub token. Created
+        // exclusively, so a leftover `.part` with looser permissions is never reused.
+        fs::remove_file(&tmp).ok();
         let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -243,20 +245,23 @@ fn level_name(server: &Path) -> String {
         .unwrap_or_else(|| "world".into())
 }
 
-/// Whether `name` is one plain folder name, so a restore only ever clears a folder directly
-/// inside the server (not `..`, `.`, an absolute path or a nested one).
-fn one_folder(name: &str) -> bool {
+/// `name` as one plain folder name, so a restore only ever clears a folder directly inside the
+/// server (not `..`, `.`, an absolute path or a nested one). Callers join the returned part, not
+/// `name`, so a trailing `/` can't make deletion follow a symlinked folder.
+fn one_folder(name: &str) -> Option<&std::ffi::OsStr> {
     let mut parts = Path::new(name).components();
-    matches!((parts.next(), parts.next()), (Some(Component::Normal(_)), None))
+    match (parts.next(), parts.next()) {
+        (Some(Component::Normal(part)), None) => Some(part),
+        _ => None,
+    }
 }
 
 /// The world folder a restore clears, refused unless it sits directly inside the server.
 fn world_dir(server: &Path) -> Result<PathBuf> {
     let name = level_name(server);
-    if !one_folder(&name) {
-        bail!("level-name {name:?} in server.properties isn't a plain folder name");
-    }
-    Ok(server.join(name))
+    let part =
+        one_folder(&name).with_context(|| format!("level-name {name:?} in server.properties isn't a plain folder name"))?;
+    Ok(server.join(part))
 }
 
 /// Restores a backup. Minecraft must be stopped. Whole server backups replace the pack files
@@ -265,13 +270,15 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
     let b = find(server, id)?;
     let file = server.join(&b.id);
     if b.full {
+        // Checked first: a refused restore must leave the server as it was.
+        let world = world_dir(server)?;
         if let Some(tree) = srv::applied_tree(server) {
             for p in tree.files.keys() {
                 fs::remove_file(server.join(p)).ok();
             }
         }
         // Chunks generated after the backup would otherwise survive the restore.
-        fs::remove_dir_all(world_dir(server)?).ok();
+        fs::remove_dir_all(world).ok();
         tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?)).unpack(server)?;
         return Ok(());
     }
@@ -284,7 +291,7 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
     let (dest, clear) = if entries.iter().any(|e| e == "level.dat") {
         let world = world_dir(server)?;
         (world.clone(), world)
-    } else if let Some(top) = entries.iter().find_map(|e| e.strip_suffix("/level.dat").filter(|t| one_folder(t))) {
+    } else if let Some(top) = entries.iter().find_map(|e| e.strip_suffix("/level.dat").and_then(one_folder)) {
         (server.to_path_buf(), server.join(top))
     } else {
         bail!("{} doesn't look like a world backup (no level.dat)", b.note);
@@ -374,9 +381,15 @@ mod tests {
         z.finish().unwrap();
         assert!(restore(&d, "backups/escape.zip").is_err());
         assert!(d.join("world/level.dat").exists());
-        // So is a server.properties pointing the world outside the server.
+        // So is a server.properties pointing the world outside the server, and pack files survive.
+        let mut tree = beacon_core::model::Tree::default();
+        tree.files.insert("mods/pack.jar".into(), serde_json::from_value(serde_json::json!({ "hash": "x", "size": 0 })).unwrap());
+        fs::write(d.join(".beacon/server-tree.json"), serde_json::to_vec(&tree).unwrap()).unwrap();
+        fs::write(d.join("mods/pack.jar"), "").unwrap();
         fs::write(d.join("server.properties"), "level-name=../elsewhere\n").unwrap();
         assert!(restore(&d, &own.id).is_err());
+        assert!(d.join("world/level.dat").exists() && d.join("mods/pack.jar").exists(), "a refused restore deletes nothing");
+        assert_eq!(one_folder("world/"), Some(std::ffi::OsStr::new("world")));
         fs::write(d.join("server.properties"), "level-name=world\n").unwrap();
         // Partial archives from incremental backups are refused rather than half restored.
         fs::copy(d.join("backups/2026-11-05.zip"), d.join("backups/incremental.zip")).unwrap();
