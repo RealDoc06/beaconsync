@@ -104,8 +104,10 @@ pub async fn latest() -> Result<Release> {
     }
 }
 
-/// A release by version ("0.1.0-alpha.2") or tag ("v0.1.0-alpha.2").
+/// A release by version ("0.1.0-alpha.2") or tag ("v0.1.0-alpha.2"). The version can come from
+/// the hub, so it must look like one: anything else could steer the URL to another repo.
 pub async fn by_version(version: &str) -> Result<Release> {
+    ensure!(is_version(version), "{version:?} is not a BeaconSync version");
     let tag = format!("v{}", version.trim_start_matches('v'));
     match manifest(&format!("download/{tag}")).await {
         Some(r) => Ok(r),
@@ -143,6 +145,11 @@ pub async fn download(asset: &Asset, dest: &Path, on: impl Fn(u64)) -> Result<()
     Ok(())
 }
 
+/// Version characters only (`0-9a-zA-Z.-+`), so it is safe inside a URL path.
+fn is_version(v: &str) -> bool {
+    (1..=64).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.+".contains(&b))
+}
+
 /// Semver order for `MAJOR.MINOR.PATCH[-PRE]`: a prerelease sorts before its release and
 /// numeric prerelease parts compare as numbers ("alpha.10" > "alpha.9").
 pub fn newer(a: &str, b: &str) -> bool {
@@ -177,7 +184,15 @@ pub fn cli_asset() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::newer;
+    use super::{is_version, newer};
+
+    #[test]
+    fn only_version_strings_reach_release_urls() {
+        assert!(is_version("0.1.0-alpha.14") && is_version("v1.2.3+build.5"));
+        for bad in ["", "9.9.9/../../../other/repo", "1.0%2f..", "1.0?x", "1.0#x", "1.0\\.."] {
+            assert!(!is_version(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn orders_versions_like_semver() {
