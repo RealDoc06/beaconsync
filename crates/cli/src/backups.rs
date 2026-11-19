@@ -10,7 +10,7 @@ use beacon_core::{
 };
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
 
@@ -173,7 +173,15 @@ pub fn create(server: &Path, note: &str) -> Result<Backup> {
     let name = format!("{}-{}.tar.gz", beacon_core::now(), slug.trim_matches('-'));
     let tmp = dir.join(format!("{name}.part"));
     {
-        let enc = flate2::write::GzEncoder::new(fs::File::create(&tmp)?, flate2::Compression::fast());
+        // Owner-only on Unix: the archive holds `.beacon/server.json` and its hub token.
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let enc = flate2::write::GzEncoder::new(options.open(&tmp)?, flate2::Compression::fast());
         let mut tar = tar::Builder::new(enc);
         tar.follow_symlinks(false);
         let world = level_name(server);
@@ -235,6 +243,22 @@ fn level_name(server: &Path) -> String {
         .unwrap_or_else(|| "world".into())
 }
 
+/// Whether `name` is one plain folder name, so a restore only ever clears a folder directly
+/// inside the server (not `..`, `.`, an absolute path or a nested one).
+fn one_folder(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    matches!((parts.next(), parts.next()), (Some(Component::Normal(_)), None))
+}
+
+/// The world folder a restore clears, refused unless it sits directly inside the server.
+fn world_dir(server: &Path) -> Result<PathBuf> {
+    let name = level_name(server);
+    if !one_folder(&name) {
+        bail!("level-name {name:?} in server.properties isn't a plain folder name");
+    }
+    Ok(server.join(name))
+}
+
 /// Restores a backup. Minecraft must be stopped. Whole server backups replace the pack files
 /// and worlds; mod backups replace only the world they contain.
 pub fn restore(server: &Path, id: &str) -> Result<()> {
@@ -247,7 +271,7 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
             }
         }
         // Chunks generated after the backup would otherwise survive the restore.
-        fs::remove_dir_all(server.join(level_name(server))).ok();
+        fs::remove_dir_all(world_dir(server)?).ok();
         tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?)).unpack(server)?;
         return Ok(());
     }
@@ -258,9 +282,9 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
     let entries = archive_entries(&file)?;
     // Either the world's files at the root, or one folder holding them.
     let (dest, clear) = if entries.iter().any(|e| e == "level.dat") {
-        let world = server.join(level_name(server));
+        let world = world_dir(server)?;
         (world.clone(), world)
-    } else if let Some(top) = entries.iter().find_map(|e| e.strip_suffix("/level.dat").filter(|t| !t.contains('/'))) {
+    } else if let Some(top) = entries.iter().find_map(|e| e.strip_suffix("/level.dat").filter(|t| one_folder(t))) {
         (server.to_path_buf(), server.join(top))
     } else {
         bail!("{} doesn't look like a world backup (no level.dat)", b.note);
@@ -340,10 +364,20 @@ mod tests {
         );
         // Our own backups leave mod backups out.
         let own = create(&d, "manual").unwrap();
-        assert!(!archive_entries(&d.join(own.id)).unwrap().iter().any(|e| e.starts_with("backups/")));
+        assert!(!archive_entries(&d.join(&own.id)).unwrap().iter().any(|e| e.starts_with("backups/")));
         restore(&d, &b.id).unwrap();
         assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "from mod");
         assert!(restore(&d, "../etc/passwd").is_err());
+        // An archive naming `..` as its world is refused before anything is cleared.
+        let mut z = zip::ZipWriter::new(fs::File::create(d.join("backups/escape.zip")).unwrap());
+        z.start_file("../level.dat", zip::write::SimpleFileOptions::default()).unwrap();
+        z.finish().unwrap();
+        assert!(restore(&d, "backups/escape.zip").is_err());
+        assert!(d.join("world/level.dat").exists());
+        // So is a server.properties pointing the world outside the server.
+        fs::write(d.join("server.properties"), "level-name=../elsewhere\n").unwrap();
+        assert!(restore(&d, &own.id).is_err());
+        fs::write(d.join("server.properties"), "level-name=world\n").unwrap();
         // Partial archives from incremental backups are refused rather than half restored.
         fs::copy(d.join("backups/2026-11-05.zip"), d.join("backups/incremental.zip")).unwrap();
         assert!(restore(&d, "backups/incremental.zip").is_err());
