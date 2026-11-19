@@ -38,14 +38,7 @@ impl Settings {
 
     /// Saves with owner-only permissions since it holds the auth token.
     pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        crate::store::write_atomic(&path, &serde_json::to_vec_pretty(self)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
+        crate::store::write_private(&Self::path(), &serde_json::to_vec_pretty(self)?)
     }
 
     pub fn hub_url(&self) -> String {
