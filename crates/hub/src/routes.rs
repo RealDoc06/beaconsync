@@ -274,21 +274,30 @@ pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
         })
         .optional()?;
     let slot = ArgonSlot::take()?;
-    // Counted before checking, so parallel guesses can't all slip in under the limit.
-    let allowed = s.failures(&key, |(count, _)| {
-        *count += 1;
-        *count <= MAX_FAILURES
-    });
-    if !allowed {
-        return Err(Error(StatusCode::TOO_MANY_REQUESTS, "too many wrong passwords, try again in 15 minutes".into()));
-    }
     let hash = row.as_ref().map(|(_, _, h)| h.clone());
-    let ok = argon(slot, move || verify_password(&c.password, hash.as_deref().unwrap_or(&DUMMY_HASH))).await?;
-    let Some((id, username, _)) = row.filter(|_| ok) else {
-        return Err(wrong());
-    };
-    s.failures.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
-    Ok(User { id, username })
+    let state = s.clone();
+    // Counted inside the job, right before the check: parallel guesses can't all slip in under
+    // the limit, and a request turned away or dropped while queued never costs an attempt.
+    let verdict = argon(slot, move || {
+        let allowed = state.failures(&key, |(count, _)| {
+            *count += 1;
+            *count <= MAX_FAILURES
+        });
+        if !allowed {
+            return None;
+        }
+        let ok = verify_password(&c.password, hash.as_deref().unwrap_or(&DUMMY_HASH)) && hash.is_some();
+        if ok {
+            state.failures.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+        }
+        Some(ok)
+    })
+    .await?;
+    match (verdict, row) {
+        (None, _) => Err(Error(StatusCode::TOO_MANY_REQUESTS, "too many wrong passwords, try again in 15 minutes".into())),
+        (Some(true), Some((id, username, _))) => Ok(User { id, username }),
+        _ => Err(wrong()),
+    }
 }
 
 async fn login(State(s): State<AppState>, Json(c): Json<Credentials>) -> Result<Json<AuthResponse>> {
