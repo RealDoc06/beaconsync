@@ -120,6 +120,12 @@ async fn wrong_passwords_lock_password_sign_in_for_a_while() {
     assert!(anon.login(&good).await.unwrap_err().to_string().contains("too many"));
     // Signed in clients are unaffected.
     assert!(Hub::new(&base, Some(auth.token)).library().await.is_ok());
+    // Unknown usernames are limited the same way, so guessing names gets no free attempts.
+    let ghost = Credentials { username: "ghost".into(), password: "whatever1".into() };
+    for _ in 0..10 {
+        assert!(!anon.login(&ghost).await.unwrap_err().to_string().contains("too many"));
+    }
+    assert!(anon.login(&ghost).await.unwrap_err().to_string().contains("too many"));
 }
 
 #[tokio::test]

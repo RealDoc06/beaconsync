@@ -21,10 +21,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, LazyLock, Mutex, MutexGuard},
     time::Duration,
 };
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);
@@ -37,12 +37,14 @@ pub struct Inner {
     waiters: Mutex<HashMap<String, Arc<Notify>>>,
     /// Live console and backups per server, kept in memory only.
     consoles: Mutex<HashMap<String, Console>>,
-    /// Failed sign ins per user id: (count, start of the window).
+    /// Failed sign ins per username, existing or not: (count, start of the window).
     failures: Mutex<HashMap<String, (u32, i64)>>,
 }
 
-/// Wrong passwords allowed per account within [`FAILURE_WINDOW`] seconds before sign ins with a
-/// password are refused for the rest of it. Existing tokens keep working.
+/// Wrong passwords allowed per username within [`FAILURE_WINDOW`] seconds before sign ins with a
+/// password are refused for the rest of it. Existing tokens keep working. The limit is per
+/// account, not per client, so someone who knows a username can keep its password sign in locked;
+/// the hub sits behind a proxy and has no client address it can trust.
 const MAX_FAILURES: u32 = 10;
 const FAILURE_WINDOW: i64 = 15 * 60;
 
@@ -174,11 +176,17 @@ async fn register(State(s): State<AppState>, Json(c): Json<Credentials>) -> Resu
     if c.password.len() < 8 {
         return Err(Error::bad("password must be at least 8 characters"));
     }
+    let taken = |db: &Connection| -> Result<bool> {
+        Ok(db.query_row("select 1 from users where username = ?1", params![username], |_| Ok(())).optional()?.is_some())
+    };
+    // Checked before hashing too, so repeat requests for a taken name cost no Argon2 work.
+    if taken(&s.db())? {
+        return Err(Error::conflict("that username is taken"));
+    }
     let pw = argon(move || hash_password(&c.password)).await??;
     let db = s.db();
     let id = new_id();
-    let taken = db.query_row("select 1 from users where username = ?1", params![username], |_| Ok(())).optional()?.is_some();
-    if taken {
+    if taken(&db)? {
         return Err(Error::conflict("that username is taken"));
     }
     db.execute("insert into users (id, username, pw_hash, created) values (?1, ?2, ?3, ?4)", params![id, username, pw, now()])?;
@@ -186,34 +194,51 @@ async fn register(State(s): State<AppState>, Json(c): Json<Credentials>) -> Resu
     Ok(Json(AuthResponse { token, user: User { id, username: username.into() } }))
 }
 
-/// Runs Argon2 on the blocking pool: it takes tens of milliseconds of CPU, which would otherwise
-/// stall an async worker (and, under the DB lock, every request).
+/// One Argon2 run per CPU at a time: each takes tens of milliseconds and ~19 MiB, so a flood of
+/// sign ins or registrations queues here instead of exhausting the host.
+static ARGON: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get()))));
+
+/// Runs Argon2 on the blocking pool, so it never stalls an async worker (and, under the DB lock,
+/// every request). The permit lives as long as the work, even if the request is dropped.
 async fn argon<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
-    tokio::task::spawn_blocking(f).await.map_err(|e| anyhow::Error::from(e).into())
+    let permit = ARGON.clone().acquire_owned().await.map_err(anyhow::Error::from)?;
+    tokio::task::spawn_blocking(move || {
+        let out = f();
+        drop(permit);
+        out
+    })
+    .await
+    .map_err(|e| anyhow::Error::from(e).into())
 }
+
+/// Checked against when the username doesn't exist, so unknown names cost the same time as real
+/// ones and don't reveal which accounts exist.
+static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| hash_password("not a real password").unwrap_or_default());
 
 /// Checks a username/password pair (also used by the /device web page).
 pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
+    let name = c.username.trim().to_string();
     let row: Option<(String, String, String)> = s
         .db()
-        .query_row("select id, username, pw_hash from users where username = ?1", params![c.username.trim()], |r| {
+        .query_row("select id, username, pw_hash from users where username = ?1", params![name], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?;
-    let wrong = || Error(StatusCode::UNAUTHORIZED, "wrong username or password".into());
-    let (id, username, hash) = row.ok_or_else(wrong)?;
     // Counted before checking, so parallel guesses can't all slip in under the limit.
-    let allowed = s.failures(&id, |(count, _)| {
+    let allowed = s.failures(&name, |(count, _)| {
         *count += 1;
         *count <= MAX_FAILURES
     });
     if !allowed {
         return Err(Error(StatusCode::TOO_MANY_REQUESTS, "too many wrong passwords, try again in 15 minutes".into()));
     }
-    if !argon(move || verify_password(&c.password, &hash)).await? {
-        return Err(wrong());
-    }
-    s.failures.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    let hash = row.as_ref().map(|(_, _, h)| h.clone());
+    let ok = argon(move || verify_password(&c.password, hash.as_deref().unwrap_or(&DUMMY_HASH))).await?;
+    let Some((id, username, _)) = row.filter(|_| ok) else {
+        return Err(Error(StatusCode::UNAUTHORIZED, "wrong username or password".into()));
+    };
+    s.failures.lock().unwrap_or_else(|e| e.into_inner()).remove(&name);
     Ok(User { id, username })
 }
 

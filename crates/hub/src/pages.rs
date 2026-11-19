@@ -5,6 +5,7 @@ use crate::routes::{AppState, approve_device, check_credentials, public_info};
 use axum::{
     Form,
     extract::{Path, State},
+    http::StatusCode,
     response::Html,
 };
 use beacon_core::api::Credentials;
@@ -79,12 +80,16 @@ pub struct DeviceForm {
     password: String,
 }
 
-pub async fn device_submit(State(s): State<AppState>, Form(f): Form<DeviceForm>) -> Html<String> {
+/// Errors keep their API status (401, 429...) so scripts and proxies see the failure.
+pub async fn device_submit(State(s): State<AppState>, Form(f): Form<DeviceForm>) -> (StatusCode, Html<String>) {
     let result = check_credentials(&s, Credentials { username: f.username, password: f.password })
         .await
         .and_then(|u| approve_device(&s, &u.id, &f.user_code));
     match result {
-        Ok(()) => page("Approved", "<h1 class=\"ok\">Approved</h1><p>You can close this page and go back to the terminal.</p>"),
-        Err(e) => device_html(&format!("<p class=\"err\">{}</p>", esc(&e.1))),
+        Ok(()) => (
+            StatusCode::OK,
+            page("Approved", "<h1 class=\"ok\">Approved</h1><p>You can close this page and go back to the terminal.</p>"),
+        ),
+        Err(e) => (e.0, device_html(&format!("<p class=\"err\">{}</p>", esc(&e.1)))),
     }
 }
