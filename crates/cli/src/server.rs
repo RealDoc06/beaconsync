@@ -1473,9 +1473,7 @@ async fn apply_with_backup(
 ) -> Result<()> {
     say("backing up");
     let (d, note) = (dir.to_path_buf(), format!("before {}", t.release_name));
-    // The way back is checked before the pack changes: if the safety backup couldn't be restored,
-    // the deploy stops here with nothing touched.
-    let undo = tokio::task::spawn_blocking(move || backups::create(&d, &note).and_then(|b| backups::plan(&d, &b.id))).await??;
+    let backup = tokio::task::spawn_blocking(move || backups::create(&d, &note)).await??;
     let fetcher = Fetcher::new(Some(store.clone()), Some(hub.base.clone()));
     let applied: Result<()> = async {
         srv::apply_tree(dir, tree, &fetcher, &log_progress).await?;
@@ -1489,7 +1487,7 @@ async fn apply_with_backup(
     if let Err(e) = applied {
         say("restoring the backup");
         let d = dir.to_path_buf();
-        tokio::task::spawn_blocking(move || backups::apply(&d, undo)).await??;
+        tokio::task::spawn_blocking(move || backups::restore(&d, &backup.id)).await??;
         *cfg = ServerConfig::load(dir)?;
         return Err(e);
     }

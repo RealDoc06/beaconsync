@@ -273,14 +273,15 @@ fn one_folder(name: &str) -> Option<&std::ffi::OsStr> {
     }
 }
 
-/// `level-name` as a relative path of plain folder names (`world`, `worlds/survival`), rebuilt
-/// from its parts so `world/` is `world`. `None` for `..`, `.`, a root or a drive: the world must
-/// sit inside the server.
+/// `level-name` as a relative path of plain folder names (`world`, `./worlds/survival/`),
+/// rebuilt from its parts. `None` for `..`, a root or a drive (on Windows also a drive inside a
+/// later part, `worlds/D:x`, which would join as a drive): the world must sit inside the server.
 fn world_rel(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for part in Path::new(name).components() {
         match part {
-            Component::Normal(p) => out.push(p),
+            Component::CurDir => {}
+            Component::Normal(p) if !(cfg!(windows) && p.to_string_lossy().contains(':')) => out.push(p),
             _ => return None,
         }
     }
@@ -642,6 +643,8 @@ mod tests {
         assert_eq!(one_folder("world/"), Some(std::ffi::OsStr::new("world")));
         assert_eq!(world_rel("worlds/survival/"), Some(PathBuf::from("worlds/survival")));
         assert_eq!(world_rel("../x").or(world_rel("/abs")).or(world_rel(".")), None);
+        assert_eq!(world_rel("./worlds/survival"), Some(PathBuf::from("worlds/survival")));
+        assert_eq!(world_rel("worlds/D:x").is_none(), cfg!(windows));
         assert_eq!(server_config_entry(Path::new("./.Beacon/Server.json")), Some(PathBuf::from(".Beacon/Server.json")));
         assert_eq!(server_config_entry(Path::new("x/.beacon/server.json")), None);
         fs::write(d.join("server.properties"), "level-name=world\n").unwrap();
