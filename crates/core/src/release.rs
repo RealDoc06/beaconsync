@@ -145,9 +145,14 @@ pub async fn download(asset: &Asset, dest: &Path, on: impl Fn(u64)) -> Result<()
     Ok(())
 }
 
-/// Version characters only (`0-9a-zA-Z.-+`), so it is safe inside a URL path.
+/// Version characters only (`0-9a-zA-Z.-+`), starting with a digit and with no empty dot parts, so
+/// it is safe inside a URL path (`..` and `.` can't appear as segments).
 fn is_version(v: &str) -> bool {
-    (1..=64).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.+".contains(&b))
+    let core = v.strip_prefix('v').unwrap_or(v);
+    (1..=64).contains(&v.len())
+        && core.starts_with(|c: char| c.is_ascii_digit())
+        && !core.contains("..")
+        && core.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.+".contains(&b))
 }
 
 /// Semver order for `MAJOR.MINOR.PATCH[-PRE]`: a prerelease sorts before its release and
@@ -189,7 +194,9 @@ mod tests {
     #[test]
     fn only_version_strings_reach_release_urls() {
         assert!(is_version("0.1.0-alpha.14") && is_version("v1.2.3+build.5"));
-        for bad in ["", "9.9.9/../../../other/repo", "1.0%2f..", "1.0?x", "1.0#x", "1.0\\.."] {
+        for bad in
+            ["", "v", ".", "..", "v..", "1..2", "x1.0", "9.9.9/../../../other/repo", "1.0%2f..", "1.0?x", "1.0#x", "1.0\\.."]
+        {
             assert!(!is_version(bad), "{bad}");
         }
     }
