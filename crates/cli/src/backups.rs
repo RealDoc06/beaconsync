@@ -277,7 +277,10 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
 fn archive_entries(file: &Path) -> Result<Vec<String>> {
     if file.to_string_lossy().to_ascii_lowercase().ends_with(".zip") {
         let z = zip::ZipArchive::new(fs::File::open(file)?)?;
-        return Ok(z.file_names().map(|n| n.trim_start_matches("./").to_string()).collect());
+        return Ok(z
+            .file_names()
+            .map(|n| n.map(|n| n.trim_start_matches("./").to_string()))
+            .collect::<zip::result::ZipResult<_>>()?);
     }
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?));
     let mut out = vec![];
