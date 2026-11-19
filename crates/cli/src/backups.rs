@@ -187,19 +187,27 @@ pub fn create(server: &Path, note: &str) -> Result<Backup> {
             options.mode(0o600);
         }
         let enc = flate2::write::GzEncoder::new(options.open(&tmp)?, flate2::Compression::fast());
-        let mut tar = tar::Builder::new(enc);
-        tar.follow_symlinks(false);
-        let world = level_name(server);
-        let walk = walkdir::WalkDir::new(server).min_depth(1).into_iter();
-        for e in walk.filter_entry(|e| !skip(server, &world, e.path().strip_prefix(server).unwrap_or(e.path()))) {
-            let e = e?;
-            if e.file_type().is_file() {
-                tar.append_path_with_name(e.path(), e.path().strip_prefix(server)?)?;
+        let written = (|| -> Result<()> {
+            let mut tar = tar::Builder::new(enc);
+            tar.follow_symlinks(false);
+            let world = level_name(server);
+            let walk = walkdir::WalkDir::new(server).min_depth(1).into_iter();
+            for e in walk.filter_entry(|e| !skip(server, &world, e.path().strip_prefix(server).unwrap_or(e.path()))) {
+                let e = e?;
+                if e.file_type().is_file() {
+                    tar.append_path_with_name(e.path(), e.path().strip_prefix(server)?)?;
+                }
             }
+            tar.into_inner()?.finish()?;
+            fs::rename(&tmp, dir.join(&name))?;
+            Ok(())
+        })();
+        // A failed backup (disk full, say) must not leave a partial archive outside retention.
+        if written.is_err() {
+            fs::remove_file(&tmp).ok();
         }
-        tar.into_inner()?.finish()?;
+        written?;
     }
-    fs::rename(&tmp, dir.join(&name))?;
     find(server, &rel(server, &dir.join(name)))
 }
 
@@ -270,6 +278,14 @@ fn world_dir(server: &Path) -> Result<PathBuf> {
 /// Where the server's config, hub token included, lives inside a whole server backup.
 const SERVER_CONFIG: &str = ".beacon/server.json";
 
+/// Whether an archive path names [`SERVER_CONFIG`], however it is spelled (`./`, or another case
+/// on a case-insensitive disk).
+fn is_server_config(path: &Path) -> bool {
+    let parts: Vec<_> = path.components().filter(|c| !matches!(c, Component::CurDir)).collect();
+    matches!(parts.as_slice(), [Component::Normal(dir), Component::Normal(file)]
+        if dir.eq_ignore_ascii_case(".beacon") && file.eq_ignore_ascii_case("server.json"))
+}
+
 /// Removes a world folder before a restore. Missing is fine; anything else stops the restore.
 fn clear(dir: &Path) -> Result<()> {
     match fs::remove_dir_all(dir) {
@@ -292,16 +308,22 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
                 fs::remove_file(server.join(p)).ok();
             }
         }
+        // Canonical like `Archive::unpack`, which also gives Windows its long path prefix.
+        let dest = server.canonicalize()?;
         let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?));
         for entry in archive.entries()? {
             let mut entry = entry?;
-            // The server token goes back owner-only from the start, never through a default mode.
-            if entry.path()? == Path::new(SERVER_CONFIG) {
+            // The server token goes back owner-only from the start, never through a default mode,
+            // and only into the server's own `.beacon` folder.
+            if is_server_config(&entry.path()?) {
+                if fs::symlink_metadata(dest.join(".beacon")).is_ok_and(|m| m.file_type().is_symlink()) {
+                    bail!("{} is a link; not writing the server token through it", dest.join(".beacon").display());
+                }
                 let mut bytes = vec![];
                 entry.read_to_end(&mut bytes)?;
-                beacon_core::store::write_private(&server.join(SERVER_CONFIG), &bytes)?;
+                beacon_core::store::write_private(&dest.join(SERVER_CONFIG), &bytes)?;
             } else {
-                entry.unpack_in(server)?;
+                entry.unpack_in(&dest)?;
             }
         }
         return Ok(());
@@ -425,6 +447,7 @@ mod tests {
         assert!(restore(&d, &own.id).is_err());
         assert!(d.join("world/level.dat").exists() && d.join("mods/pack.jar").exists(), "a refused restore deletes nothing");
         assert_eq!(one_folder("world/"), Some(std::ffi::OsStr::new("world")));
+        assert!(is_server_config(Path::new("./.Beacon/Server.json")) && !is_server_config(Path::new("x/.beacon/server.json")));
         fs::write(d.join("server.properties"), "level-name=world\n").unwrap();
         // Partial archives from incremental backups are refused rather than half restored.
         fs::copy(d.join("backups/2026-11-05.zip"), d.join("backups/incremental.zip")).unwrap();
