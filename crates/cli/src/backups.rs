@@ -309,8 +309,7 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
         // Canonical like `Archive::unpack`, which also gives Windows its long path prefix.
         let dest = server.canonicalize()?;
         let world = world_dir(server)?;
-        // Reading the whole archive first also refuses a truncated or corrupt backup up front.
-        let tokens: Vec<PathBuf> = archive_entries(&file)?.iter().filter_map(|e| server_config_entry(Path::new(e))).collect();
+        let tokens = check_full_archive(&file)?;
         // The token is only ever written into a real folder inside the server, never through a link.
         let refuse_link = |rel: &Path| -> Result<()> {
             let dir = dest.join(rel.parent().unwrap_or(rel));
@@ -370,6 +369,26 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
         tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&file)?)).unpack(&dest)?;
     }
     Ok(())
+}
+
+/// Reads a whole server archive before a restore touches anything, returning the spellings of its
+/// token entries. Refuses a truncated or corrupted backup (every entry, then the rest of the gzip
+/// stream so its checksum is checked: tar stops at its end marker) and a link entry where the
+/// token's folder would be.
+fn check_full_archive(file: &Path) -> Result<Vec<PathBuf>> {
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?));
+    let mut tokens = vec![];
+    for entry in tar.entries()? {
+        let entry = entry?;
+        let path = entry.path()?;
+        let kind = entry.header().entry_type();
+        if (kind.is_symlink() || kind.is_hard_link()) && server_config_entry(&path.join("server.json")).is_some() {
+            bail!("the backup links {}; not restoring the server token through it", path.display());
+        }
+        tokens.extend(server_config_entry(&path));
+    }
+    std::io::copy(&mut tar.into_inner(), &mut std::io::sink()).context("the backup is damaged")?;
+    Ok(tokens)
 }
 
 fn archive_entries(file: &Path) -> Result<Vec<String>> {
@@ -443,6 +462,14 @@ mod tests {
         fs::write(own.join("1-truncated.tar.gz"), &bytes[..bytes.len() / 2]).unwrap();
         assert!(find(&d, ".beacon/backups/1-truncated.tar.gz").unwrap().full);
         assert!(restore(&d, ".beacon/backups/1-truncated.tar.gz").is_err());
+        // Only the gzip footer missing, or one flipped byte: tar alone would read these fine.
+        fs::write(own.join("1-footerless.tar.gz"), &bytes[..bytes.len() - 8]).unwrap();
+        assert!(restore(&d, ".beacon/backups/1-footerless.tar.gz").is_err());
+        let mut flipped = bytes.clone();
+        let len = flipped.len();
+        flipped[len - 5] ^= 0xff;
+        fs::write(own.join("1-flipped.tar.gz"), &flipped).unwrap();
+        assert!(restore(&d, ".beacon/backups/1-flipped.tar.gz").is_err());
         assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "old");
         // A `.Beacon` link made by the archive itself is never written through.
         #[cfg(unix)]
@@ -463,10 +490,9 @@ mod tests {
             tar.into_inner().unwrap().finish().unwrap();
             assert!(find(&d, ".beacon/backups/2-linking.tar.gz").unwrap().full);
             let err = restore(&d, ".beacon/backups/2-linking.tar.gz").unwrap_err().to_string();
-            // Case-sensitive disks reach the link check; case-insensitive ones can't create `.Beacon`
-            // next to the real `.beacon` at all.
-            assert!(err.contains("is a link") || cfg!(target_os = "macos"), "{err}");
+            assert!(err.contains("links"), "{err}");
             assert!(!outside.join("server.json").exists());
+            assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "old", "refused before deleting");
             fs::remove_dir_all(outside).ok();
         }
         fs::remove_dir_all(d).ok();
