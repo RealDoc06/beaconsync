@@ -134,7 +134,7 @@ GET /api/objects/:hash   -> raw object bytes (blobs, trees, commits)
 Authenticated:
 
 ```
-POST /api/auth/register|login      { username, password } -> { token, user }   (429 after 10 wrong passwords for a username, existing or not, within 15 minutes; per account, so it can keep a known username's password sign in locked, but tokens keep working)
+POST /api/auth/register|login      { username, password } -> { token, user }   (429 after 10 wrong passwords for a username, existing or not, within 15 minutes; per account, so it can keep a known username's password sign in locked, but tokens keep working; 503 when too many sign ins are already waiting)
 POST /api/auth/device/start        -> { device_code, user_code, expires_in }
 POST /api/auth/device/poll         { device_code } -> { token, user } | 428 pending
 POST /api/auth/device/approve      { user_code }

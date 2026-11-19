@@ -198,7 +198,7 @@ async fn register(State(s): State<AppState>, Json(c): Json<Credentials>) -> Resu
     if taken(&s.db())? {
         return Err(Error::conflict("that username is taken"));
     }
-    let pw = argon(move || hash_password(&c.password)).await??;
+    let pw = argon(ArgonSlot::take()?, move || hash_password(&c.password)).await??;
     let db = s.db();
     let id = new_id();
     if taken(&db)? {
@@ -219,21 +219,31 @@ static ARGON: LazyLock<Arc<Semaphore>> =
 const MAX_ARGON_WAITING: usize = 256;
 static ARGON_WAITING: AtomicUsize = AtomicUsize::new(0);
 
+/// A place in the queue for [`ARGON`], taken before anything else is recorded so a busy hub
+/// turns requests away without counting them (or remembering their usernames).
+struct ArgonSlot;
+
+impl ArgonSlot {
+    fn take() -> Result<Self> {
+        if ARGON_WAITING.fetch_add(1, Ordering::Relaxed) >= MAX_ARGON_WAITING {
+            ARGON_WAITING.fetch_sub(1, Ordering::Relaxed);
+            return Err(Error(StatusCode::SERVICE_UNAVAILABLE, "the hub is busy, try again shortly".into()));
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for ArgonSlot {
+    fn drop(&mut self) {
+        ARGON_WAITING.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Runs Argon2 on the blocking pool, so it never stalls an async worker (and, under the DB lock,
 /// every request). The permit lives as long as the work, even if the request is dropped.
-async fn argon<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
-    struct Waiting;
-    impl Drop for Waiting {
-        fn drop(&mut self) {
-            ARGON_WAITING.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
-    let waiting = Waiting;
-    if ARGON_WAITING.fetch_add(1, Ordering::Relaxed) >= MAX_ARGON_WAITING {
-        return Err(Error(StatusCode::SERVICE_UNAVAILABLE, "the hub is busy, try again shortly".into()));
-    }
+async fn argon<T: Send + 'static>(slot: ArgonSlot, f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
     let permit = ARGON.clone().acquire_owned().await.map_err(anyhow::Error::from)?;
-    drop(waiting);
+    drop(slot);
     tokio::task::spawn_blocking(move || {
         let out = f();
         drop(permit);
@@ -263,6 +273,7 @@ pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?;
+    let slot = ArgonSlot::take()?;
     // Counted before checking, so parallel guesses can't all slip in under the limit.
     let allowed = s.failures(&key, |(count, _)| {
         *count += 1;
@@ -272,7 +283,7 @@ pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
         return Err(Error(StatusCode::TOO_MANY_REQUESTS, "too many wrong passwords, try again in 15 minutes".into()));
     }
     let hash = row.as_ref().map(|(_, _, h)| h.clone());
-    let ok = argon(move || verify_password(&c.password, hash.as_deref().unwrap_or(&DUMMY_HASH))).await?;
+    let ok = argon(slot, move || verify_password(&c.password, hash.as_deref().unwrap_or(&DUMMY_HASH))).await?;
     let Some((id, username, _)) = row.filter(|_| ok) else {
         return Err(wrong());
     };
