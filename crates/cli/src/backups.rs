@@ -149,7 +149,8 @@ fn find(server: &Path, id: &str) -> Result<Backup> {
 /// files being written.
 /// `world` is the world folder, always kept even if its name contains "backup".
 fn skip(server: &Path, world: &str, rel: &Path) -> bool {
-    let s = rel.to_string_lossy();
+    // Forward slashes on every OS, so the prefixes below also match Windows paths.
+    let s = rel.to_string_lossy().replace('\\', "/");
     let top = rel.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
     s.starts_with(".beacon/backup")
         || s.starts_with(".beacon/objects")
