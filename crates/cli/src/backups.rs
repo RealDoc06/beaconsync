@@ -148,7 +148,7 @@ fn find(server: &Path, id: &str) -> Result<Backup> {
 
 /// Left out of BeaconSync backups: caches, logs, other backups (and their retention rule) and
 /// files being written.
-/// `world` is the world folder, always kept even if its name contains "backup".
+/// `world` is the world's top folder, always kept even if its name contains "backup".
 fn skip(server: &Path, world: &str, rel: &Path) -> bool {
     // Forward slashes on every OS, so the prefixes below also match Windows paths.
     let s = rel.to_string_lossy().replace('\\', "/");
@@ -190,10 +190,13 @@ pub fn create(server: &Path, note: &str) -> Result<Backup> {
         let written = (|| -> Result<()> {
             let mut tar = tar::Builder::new(enc);
             tar.follow_symlinks(false);
-            // Normalized like restore's `world_dir` (`world/` is `world`), so the world restore
-            // clears is always one the backup kept, even when its name contains "backup".
+            // The world's top folder, normalized like restore's `world_dir` (`world/` is `world`),
+            // so the world restore clears is always one the backup kept, even when its name
+            // contains "backup".
             let world = level_name(server);
-            let world = one_folder(&world).map_or_else(|| world.clone(), |w| w.to_string_lossy().into_owned());
+            let world = world_rel(&world)
+                .and_then(|w| w.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()))
+                .unwrap_or(world);
             let walk = walkdir::WalkDir::new(server).min_depth(1).into_iter();
             for e in walk.filter_entry(|e| !skip(server, &world, e.path().strip_prefix(server).unwrap_or(e.path()))) {
                 let e = e?;
@@ -270,12 +273,26 @@ fn one_folder(name: &str) -> Option<&std::ffi::OsStr> {
     }
 }
 
-/// The world folder a restore clears, refused unless it sits directly inside the server.
+/// `level-name` as a relative path of plain folder names (`world`, `worlds/survival`), rebuilt
+/// from its parts so `world/` is `world`. `None` for `..`, `.`, a root or a drive: the world must
+/// sit inside the server.
+fn world_rel(name: &str) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for part in Path::new(name).components() {
+        match part {
+            Component::Normal(p) => out.push(p),
+            _ => return None,
+        }
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
+}
+
+/// The world folder a restore clears, refused unless it sits inside the server.
 fn world_dir(server: &Path) -> Result<PathBuf> {
     let name = level_name(server);
-    let part =
-        one_folder(&name).with_context(|| format!("level-name {name:?} in server.properties isn't a plain folder name"))?;
-    Ok(server.join(part))
+    let rel =
+        world_rel(&name).with_context(|| format!("level-name {name:?} in server.properties isn't a folder inside the server"))?;
+    Ok(server.join(rel))
 }
 
 /// The archive path, without `./` parts, when it names `.beacon/server.json` (the server's config,
@@ -361,7 +378,9 @@ pub fn plan(server: &Path, id: &str) -> Result<Plan> {
     if name.contains("incremental") || name.contains("differential") {
         bail!("{} only holds changes since an earlier backup; restore it from {} itself", b.note, b.source);
     }
-    let entries = archive_entries(&file)?;
+    let zip = file.to_string_lossy().to_ascii_lowercase().ends_with(".zip");
+    // Read through the kept handle, so the layout checked is the layout extracted.
+    let entries = archive_entries(archive.try_clone()?, zip)?;
     // Either the world's files at the root, or one folder holding them.
     let (dest, old) = if entries.iter().any(|e| e == "level.dat") {
         let world = world_dir(server)?;
@@ -371,7 +390,6 @@ pub fn plan(server: &Path, id: &str) -> Result<Plan> {
     } else {
         bail!("{} doesn't look like a world backup (no level.dat)", b.note);
     };
-    let zip = file.to_string_lossy().to_ascii_lowercase().ends_with(".zip");
     Ok(Plan { id: b.id, archive, kind: PlanKind::World { zip, dest, old } })
 }
 
@@ -445,15 +463,15 @@ fn check_full_archive(file: fs::File) -> Result<Vec<PathBuf>> {
     Ok(tokens)
 }
 
-fn archive_entries(file: &Path) -> Result<Vec<String>> {
-    if file.to_string_lossy().to_ascii_lowercase().ends_with(".zip") {
-        let z = zip::ZipArchive::new(fs::File::open(file)?)?;
+fn archive_entries(file: fs::File, zip: bool) -> Result<Vec<String>> {
+    if zip {
+        let z = zip::ZipArchive::new(file)?;
         return Ok(z
             .file_names()
             .map(|n| n.map(|n| n.trim_start_matches("./").to_string()))
             .collect::<zip::result::ZipResult<_>>()?);
     }
-    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?));
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
     let mut out = vec![];
     for e in tar.entries()? {
         out.push(e?.path()?.to_string_lossy().trim_start_matches("./").to_string());
@@ -464,6 +482,10 @@ fn archive_entries(file: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entries(tar_gz: &Path) -> Vec<String> {
+        archive_entries(fs::File::open(tar_gz).unwrap(), false).unwrap()
+    }
 
     const SERVER_CONFIG: &str = ".beacon/server.json";
     use std::io::Write;
@@ -513,7 +535,7 @@ mod tests {
         fs::write(d.join("backup-world/level.dat"), "mine").unwrap();
         fs::write(d.join("server.properties"), "level-name=backup-world/\n").unwrap();
         let b = create(&d, "x").unwrap();
-        assert!(archive_entries(&d.join(&b.id)).unwrap().iter().any(|e| e == "backup-world/level.dat"));
+        assert!(entries(&d.join(&b.id)).iter().any(|e| e == "backup-world/level.dat"));
         fs::write(d.join("backup-world/level.dat"), "newer").unwrap();
         restore(&d, &b.id).unwrap();
         assert_eq!(fs::read_to_string(d.join("backup-world/level.dat")).unwrap(), "mine");
@@ -599,7 +621,7 @@ mod tests {
         );
         // Our own backups leave mod backups out.
         let own = create(&d, "manual").unwrap();
-        assert!(!archive_entries(&d.join(&own.id)).unwrap().iter().any(|e| e.starts_with("backups/")));
+        assert!(!entries(&d.join(&own.id)).iter().any(|e| e.starts_with("backups/")));
         restore(&d, &b.id).unwrap();
         assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "from mod");
         assert!(restore(&d, "../etc/passwd").is_err());
@@ -618,6 +640,8 @@ mod tests {
         assert!(restore(&d, &own.id).is_err());
         assert!(d.join("world/level.dat").exists() && d.join("mods/pack.jar").exists(), "a refused restore deletes nothing");
         assert_eq!(one_folder("world/"), Some(std::ffi::OsStr::new("world")));
+        assert_eq!(world_rel("worlds/survival/"), Some(PathBuf::from("worlds/survival")));
+        assert_eq!(world_rel("../x").or(world_rel("/abs")).or(world_rel(".")), None);
         assert_eq!(server_config_entry(Path::new("./.Beacon/Server.json")), Some(PathBuf::from(".Beacon/Server.json")));
         assert_eq!(server_config_entry(Path::new("x/.beacon/server.json")), None);
         fs::write(d.join("server.properties"), "level-name=world\n").unwrap();
