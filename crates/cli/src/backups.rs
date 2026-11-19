@@ -190,7 +190,10 @@ pub fn create(server: &Path, note: &str) -> Result<Backup> {
         let written = (|| -> Result<()> {
             let mut tar = tar::Builder::new(enc);
             tar.follow_symlinks(false);
+            // Normalized like restore's `world_dir` (`world/` is `world`), so the world restore
+            // clears is always one the backup kept, even when its name contains "backup".
             let world = level_name(server);
+            let world = one_folder(&world).map_or_else(|| world.clone(), |w| w.to_string_lossy().into_owned());
             let walk = walkdir::WalkDir::new(server).min_depth(1).into_iter();
             for e in walk.filter_entry(|e| !skip(server, &world, e.path().strip_prefix(server).unwrap_or(e.path()))) {
                 let e = e?;
@@ -302,14 +305,17 @@ fn clear(dir: &Path) -> Result<()> {
 /// A restore worked out by [`plan`], every check passed, before anything is deleted.
 pub struct Plan {
     id: String,
+    /// Opened before the checks and extracted from in [`apply`], so the archive that was checked
+    /// is the one restored even if a backup mod deletes or replaces the file in between.
+    archive: fs::File,
     kind: PlanKind,
 }
 
 enum PlanKind {
     /// A whole server backup: `dest` is the canonical server folder.
-    Full { file: PathBuf, dest: PathBuf, world: PathBuf },
+    Full { dest: PathBuf, world: PathBuf },
     /// A mod-made world backup, unpacked into `dest` after clearing `old`.
-    World { file: PathBuf, dest: PathBuf, old: PathBuf },
+    World { zip: bool, dest: PathBuf, old: PathBuf },
 }
 
 impl Plan {
@@ -339,16 +345,17 @@ fn refuse_link(dest: &Path, token: &Path) -> Result<()> {
 pub fn plan(server: &Path, id: &str) -> Result<Plan> {
     let b = find(server, id)?;
     let file = server.join(&b.id);
+    let archive = fs::File::open(&file)?;
     if b.full {
         // Canonical like `Archive::unpack`, which also gives Windows its long path prefix.
         let dest = server.canonicalize()?;
         let world = world_dir(server)?;
-        let tokens = check_full_archive(&file)?;
+        let tokens = check_full_archive(archive.try_clone()?)?;
         refuse_link(&dest, Path::new(".beacon/server.json"))?;
         for t in &tokens {
             refuse_link(&dest, t)?;
         }
-        return Ok(Plan { id: b.id, kind: PlanKind::Full { file, dest, world } });
+        return Ok(Plan { id: b.id, archive, kind: PlanKind::Full { dest, world } });
     }
     let name = b.id.to_ascii_lowercase();
     if name.contains("incremental") || name.contains("differential") {
@@ -364,14 +371,19 @@ pub fn plan(server: &Path, id: &str) -> Result<Plan> {
     } else {
         bail!("{} doesn't look like a world backup (no level.dat)", b.note);
     };
-    Ok(Plan { id: b.id, kind: PlanKind::World { file, dest, old } })
+    let zip = file.to_string_lossy().to_ascii_lowercase().ends_with(".zip");
+    Ok(Plan { id: b.id, archive, kind: PlanKind::World { zip, dest, old } })
 }
 
 /// Carries out a [`plan`]. Minecraft must be stopped.
 pub fn apply(server: &Path, plan: Plan) -> Result<()> {
-    let (file, dest, old) = match plan.kind {
-        PlanKind::World { file, dest, old } => (file, dest, old),
-        PlanKind::Full { file, dest, world } => {
+    use std::io::{Seek, SeekFrom};
+    let mut archive = plan.archive;
+    // The checks read through a clone of this handle, which shares its position.
+    archive.seek(SeekFrom::Start(0))?;
+    let (zip, dest, old) = match plan.kind {
+        PlanKind::World { zip, dest, old } => (zip, dest, old),
+        PlanKind::Full { dest, world } => {
             // Chunks generated after the backup would otherwise survive, so a world that can't be
             // cleared stops the restore.
             clear(&world)?;
@@ -380,7 +392,7 @@ pub fn apply(server: &Path, plan: Plan) -> Result<()> {
                     fs::remove_file(server.join(p)).ok();
                 }
             }
-            let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?));
+            let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(archive));
             for entry in archive.entries()? {
                 let mut entry = entry?;
                 // The server token goes back owner-only from the start, never through a default
@@ -400,10 +412,10 @@ pub fn apply(server: &Path, plan: Plan) -> Result<()> {
     };
     clear(&old)?;
     fs::create_dir_all(&dest)?;
-    if file.to_string_lossy().to_ascii_lowercase().ends_with(".zip") {
-        zip::ZipArchive::new(fs::File::open(&file)?)?.extract(&dest)?;
+    if zip {
+        zip::ZipArchive::new(archive)?.extract(&dest)?;
     } else {
-        tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&file)?)).unpack(&dest)?;
+        tar::Archive::new(flate2::read::GzDecoder::new(archive)).unpack(&dest)?;
     }
     Ok(())
 }
@@ -412,8 +424,8 @@ pub fn apply(server: &Path, plan: Plan) -> Result<()> {
 /// token entries. Refuses a truncated or corrupted backup (every entry, then the rest of the gzip
 /// stream so its checksum is checked: tar stops at its end marker) and a link entry where the
 /// token's folder would be.
-fn check_full_archive(file: &Path) -> Result<Vec<PathBuf>> {
-    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?));
+fn check_full_archive(file: fs::File) -> Result<Vec<PathBuf>> {
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
     let mut tokens = vec![];
     for entry in tar.entries()? {
         let entry = entry?;
@@ -491,6 +503,20 @@ mod tests {
             assert_eq!(mode(&d.join(SERVER_CONFIG)), 0o600);
         }
         assert_eq!(fs::read_to_string(d.join(SERVER_CONFIG)).unwrap(), "{\"token\":\"secret\"}");
+        fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn a_world_named_like_a_backup_folder_is_still_backed_up() {
+        let d = server();
+        fs::create_dir_all(d.join("backup-world")).unwrap();
+        fs::write(d.join("backup-world/level.dat"), "mine").unwrap();
+        fs::write(d.join("server.properties"), "level-name=backup-world/\n").unwrap();
+        let b = create(&d, "x").unwrap();
+        assert!(archive_entries(&d.join(&b.id)).unwrap().iter().any(|e| e == "backup-world/level.dat"));
+        fs::write(d.join("backup-world/level.dat"), "newer").unwrap();
+        restore(&d, &b.id).unwrap();
+        assert_eq!(fs::read_to_string(d.join("backup-world/level.dat")).unwrap(), "mine");
         fs::remove_dir_all(d).ok();
     }
 

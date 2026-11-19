@@ -1332,17 +1332,23 @@ async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut O
             }
             let before = cfg.commit.clone();
             let d = dir.to_path_buf();
-            let restored = tokio::task::spawn_blocking(move || -> Result<()> {
+            // Outer error: the restore failed and so did undoing it. Minecraft stays stopped then,
+            // so it can't start a fresh world over the cleared one. Inner error: the server is as
+            // it was before the restore, so Minecraft starts again.
+            let restored = tokio::task::spawn_blocking(move || -> Result<Result<()>> {
                 say("taking a safety backup first");
-                let safety = backups::create(&d, "before restore")?;
+                let safety = match backups::create(&d, "before restore") {
+                    Ok(s) => s,
+                    Err(e) => return Ok(Err(e)),
+                };
                 if let Err(e) = backups::apply(&d, plan) {
                     backups::restore(&d, &safety.id).with_context(|| format!("{e:#}; undoing it failed too"))?;
-                    return Err(e);
+                    return Ok(Err(e));
                 }
                 backups::prune(&d);
-                Ok(())
+                Ok(Ok(()))
             })
-            .await?;
+            .await??;
             *cfg = ServerConfig::load(dir)?;
             *mc = Some(Mc::start(dir, cfg)?);
             restored?;
