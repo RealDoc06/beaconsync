@@ -152,6 +152,7 @@ fn is_version(v: &str) -> bool {
     (1..=64).contains(&v.len())
         && core.starts_with(|c: char| c.is_ascii_digit())
         && !core.contains("..")
+        && !core.ends_with('.')
         && core.bytes().all(|b| b.is_ascii_alphanumeric() || b"-.+".contains(&b))
 }
 
@@ -194,9 +195,21 @@ mod tests {
     #[test]
     fn only_version_strings_reach_release_urls() {
         assert!(is_version("0.1.0-alpha.14") && is_version("v1.2.3+build.5"));
-        for bad in
-            ["", "v", ".", "..", "v..", "1..2", "x1.0", "9.9.9/../../../other/repo", "1.0%2f..", "1.0?x", "1.0#x", "1.0\\.."]
-        {
+        for bad in [
+            "",
+            "v",
+            ".",
+            "..",
+            "v..",
+            "1..2",
+            "1.",
+            "x1.0",
+            "9.9.9/../../../other/repo",
+            "1.0%2f..",
+            "1.0?x",
+            "1.0#x",
+            "1.0\\..",
+        ] {
             assert!(!is_version(bad), "{bad}");
         }
     }

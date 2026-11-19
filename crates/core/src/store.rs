@@ -105,10 +105,16 @@ fn write_through_temp(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
         }
         #[cfg(not(unix))]
         let _ = private;
-        let mut f = options.open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all().ok();
+        let written = options.open(&tmp).and_then(|mut f| {
+            f.write_all(bytes)?;
+            f.sync_all().ok();
+            Ok(())
+        });
+        // Unique names would otherwise pile up (secrets included) after failed writes.
+        if let Err(e) = written.and_then(|()| fs::rename(&tmp, path)) {
+            fs::remove_file(&tmp).ok();
+            return Err(e.into());
+        }
     }
-    fs::rename(&tmp, path)?;
     Ok(())
 }
