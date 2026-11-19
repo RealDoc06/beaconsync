@@ -1320,7 +1320,11 @@ async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut O
             say(format!("backup done: {} ({})", b.id, size(b.size)));
         }
         ServerAction::Restore(id) => {
-            say(format!("restoring {id}"));
+            // Checked while Minecraft still runs: a refused restore stops nothing, takes no safety
+            // backup and changes nothing.
+            let d = dir.to_path_buf();
+            let plan = tokio::task::spawn_blocking(move || backups::plan(&d, &id)).await??;
+            say(format!("restoring {}", plan.id()));
             if let Some(mut m) = mc.take() {
                 m.send("say [BeaconSync] Restoring a backup, back in a minute").await;
                 tokio::time::sleep(Duration::from_secs(3)).await;
@@ -1328,17 +1332,23 @@ async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut O
             }
             let before = cfg.commit.clone();
             let d = dir.to_path_buf();
-            let restored = tokio::task::spawn_blocking(move || -> Result<()> {
+            // Outer error: the restore failed and so did undoing it. Minecraft stays stopped then,
+            // so it can't start a fresh world over the cleared one. Inner error: the server is as
+            // it was before the restore, so Minecraft starts again.
+            let restored = tokio::task::spawn_blocking(move || -> Result<Result<()>> {
                 say("taking a safety backup first");
-                let safety = backups::create(&d, "before restore")?;
-                if let Err(e) = backups::restore(&d, &id) {
-                    backups::restore(&d, &safety.id)?;
-                    return Err(e);
+                let safety = match backups::create(&d, "before restore") {
+                    Ok(s) => s,
+                    Err(e) => return Ok(Err(e)),
+                };
+                if let Err(e) = backups::apply(&d, plan) {
+                    backups::restore(&d, &safety.id).with_context(|| format!("{e:#}; undoing it failed too"))?;
+                    return Ok(Err(e));
                 }
                 backups::prune(&d);
-                Ok(())
+                Ok(Ok(()))
             })
-            .await?;
+            .await??;
             *cfg = ServerConfig::load(dir)?;
             *mc = Some(Mc::start(dir, cfg)?);
             restored?;

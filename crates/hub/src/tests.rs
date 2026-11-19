@@ -99,6 +99,39 @@ async fn publish_and_deploy_flow() {
 }
 
 #[tokio::test]
+async fn wrong_passwords_lock_password_sign_in_for_a_while() {
+    let (_tmp, base) = start().await;
+    let anon = Hub::new(&base, None);
+    let good = Credentials { username: "doc".into(), password: "longpassword".into() };
+    let auth = anon.register(&good).await.unwrap();
+    let wrong = Credentials { password: "wrongpassword".into(), ..good.clone() };
+    // Fired at once: the limit holds for parallel guesses too.
+    let guesses: Vec<_> = (0..20)
+        .map(|_| {
+            let (a, w) = (Hub::new(&base, None), wrong.clone());
+            tokio::spawn(async move { a.login(&w).await.unwrap_err().to_string() })
+        })
+        .collect();
+    let mut errors = vec![];
+    for g in guesses {
+        errors.push(g.await.unwrap());
+    }
+    assert_eq!(errors.iter().filter(|e| e.contains("too many")).count(), 10, "{errors:?}");
+    assert!(anon.login(&good).await.unwrap_err().to_string().contains("too many"));
+    // Signed in clients are unaffected.
+    assert!(Hub::new(&base, Some(auth.token)).library().await.is_ok());
+    // Other casings of the name are the same account and share the limit.
+    let shouted = Credentials { username: "DOC".into(), ..wrong.clone() };
+    assert!(anon.login(&shouted).await.unwrap_err().to_string().contains("too many"));
+    // Unknown usernames are limited the same way, so guessing names gets no free attempts.
+    let ghost = Credentials { username: "ghost".into(), password: "whatever1".into() };
+    for _ in 0..10 {
+        assert!(!anon.login(&ghost).await.unwrap_err().to_string().contains("too many"));
+    }
+    assert!(anon.login(&ghost).await.unwrap_err().to_string().contains("too many"));
+}
+
+#[tokio::test]
 async fn device_login() {
     let (_tmp, base) = start().await;
     let anon = Hub::new(&base, None);

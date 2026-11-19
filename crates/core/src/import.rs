@@ -65,7 +65,7 @@ pub enum ImportKind {
 
 pub fn detect(path: &Path) -> Result<ImportKind> {
     let mut zip = zip::ZipArchive::new(fs::File::open(path)?).context("not a zip file")?;
-    let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+    let names: Vec<String> = zip.file_names().map(|n| n.map(|n| n.into_owned())).collect::<zip::result::ZipResult<_>>()?;
     if names.iter().any(|n| n == "modrinth.index.json") {
         return Ok(ImportKind::Mrpack);
     }
@@ -151,7 +151,7 @@ pub async fn mrpack_tree(path: &Path, store: &ObjectStore) -> Result<(MrIndex, T
             if !file.is_file() {
                 continue;
             }
-            let Some(rel) = file.name().strip_prefix(prefix).and_then(safe_rel) else { continue };
+            let Some(rel) = file.name()?.strip_prefix(prefix).and_then(safe_rel) else { continue };
             let mut bytes = Vec::with_capacity(file.size() as usize);
             file.read_to_end(&mut bytes)?;
             let id = store.put(&bytes)?;
@@ -335,7 +335,7 @@ pub async fn import_curseforge(file: &Path, root: &Path, cf: &CurseForge, author
     let overrides = format!("{}/", manifest.overrides.as_deref().unwrap_or("overrides"));
     for i in 0..zip.len() {
         let mut f = zip.by_index(i)?;
-        let Some(rel) = f.name().strip_prefix(&overrides).and_then(safe_rel) else { continue };
+        let Some(rel) = f.name()?.strip_prefix(&overrides).and_then(safe_rel) else { continue };
         if f.is_file() {
             let mut bytes = vec![];
             f.read_to_end(&mut bytes)?;
@@ -381,13 +381,17 @@ pub async fn import_curseforge(file: &Path, root: &Path, cf: &CurseForge, author
 /// Extracts a Prism/MultiMC instance export (.zip) and starts tracking it.
 pub async fn import_prism_zip(file: &Path, root: &Path, author: &str) -> Result<Repo> {
     let mut zip = zip::ZipArchive::new(fs::File::open(file)?)?;
-    let cfg_name = zip.file_names().find(|n| n.ends_with("instance.cfg")).context("no instance.cfg")?.to_string();
+    let cfg_name = zip
+        .file_names()
+        .find(|n| n.as_ref().is_ok_and(|n| n.ends_with("instance.cfg")))
+        .context("no instance.cfg")??
+        .into_owned();
     let prefix = cfg_name.trim_end_matches("instance.cfg").to_string();
     let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "pack".into());
     let dir = instance::unique_dir(root, &stem);
     for i in 0..zip.len() {
         let mut f = zip.by_index(i)?;
-        let Some(rel) = f.name().strip_prefix(&prefix).and_then(safe_rel) else { continue };
+        let Some(rel) = f.name()?.strip_prefix(&prefix).and_then(safe_rel) else { continue };
         if f.is_file() {
             let mut bytes = vec![];
             f.read_to_end(&mut bytes)?;

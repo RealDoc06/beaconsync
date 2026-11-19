@@ -56,15 +56,9 @@ impl ServerConfig {
         Ok(serde_json::from_slice(&bytes)?)
     }
 
+    /// Owner-only from the start: it holds the server's hub token.
     pub fn save(&self, dir: &Path) -> Result<()> {
-        let p = Self::path(dir);
-        write_atomic(&p, &serde_json::to_vec_pretty(self)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&p, fs::Permissions::from_mode(0o600))?;
-        }
-        Ok(())
+        crate::store::write_private(&Self::path(dir), &serde_json::to_vec_pretty(self)?)
     }
 
     /// Full command line used to start Minecraft.

@@ -76,20 +76,28 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     write_through_temp(path, bytes, false)
 }
 
-/// [`write_atomic`] for files holding secrets: owner-only permissions from the start.
+/// [`write_atomic`] for files holding secrets: owner-only permissions from the start on Unix.
+/// On Windows the file gets its folder's permissions.
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     write_through_temp(path, bytes, true)
 }
 
 fn write_through_temp(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let dir = path.parent().context("path has no parent")?;
     fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(".{}.tmp{}", path.file_name().and_then(|n| n.to_str()).unwrap_or("obj"), std::process::id()));
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    // Short and independent of the target's name, so long file names still fit the 255 byte limit.
+    let tmp = dir.join(format!(
+        ".beacon-{}-{}-{nanos}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    ));
     {
-        // The mode only applies to new files, so a leftover temp file must go first.
-        fs::remove_file(&tmp).ok();
+        // A fresh name created exclusively: concurrent saves never share a temp file, and nothing
+        // planted at that path (a symlink, a file with looser permissions) is ever written through.
         let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         if private {
             use std::os::unix::fs::OpenOptionsExt;
@@ -97,10 +105,17 @@ fn write_through_temp(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
         }
         #[cfg(not(unix))]
         let _ = private;
+        // Only cleaned up once this call created it: a failed exclusive open names someone else's file.
         let mut f = options.open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all().ok();
+        let written = f.write_all(bytes).map(|()| {
+            f.sync_all().ok();
+        });
+        drop(f);
+        // Unique names would otherwise pile up (secrets included) after failed writes.
+        if let Err(e) = written.and_then(|()| fs::rename(&tmp, path)) {
+            fs::remove_file(&tmp).ok();
+            return Err(e.into());
+        }
     }
-    fs::rename(&tmp, path)?;
     Ok(())
 }

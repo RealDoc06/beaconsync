@@ -21,10 +21,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, LazyLock, Mutex, MutexGuard,
+        atomic::{AtomicI64, AtomicUsize, Ordering},
+    },
     time::Duration,
 };
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);
@@ -37,7 +40,18 @@ pub struct Inner {
     waiters: Mutex<HashMap<String, Arc<Notify>>>,
     /// Live console and backups per server, kept in memory only.
     consoles: Mutex<HashMap<String, Console>>,
+    /// Failed sign ins per lowercased username, existing or not: (count, start of the window).
+    failures: Mutex<HashMap<String, (u32, i64)>>,
+    /// When `failures` last dropped expired entries.
+    failures_swept: AtomicI64,
 }
+
+/// Wrong passwords allowed per username within [`FAILURE_WINDOW`] seconds before sign ins with a
+/// password are refused for the rest of it. Existing tokens keep working. The limit is per
+/// account, not per client, so someone who knows a username can keep its password sign in locked;
+/// the hub sits behind a proxy and has no client address it can trust.
+const MAX_FAILURES: u32 = 10;
+const FAILURE_WINDOW: i64 = 15 * 60;
 
 /// Lines kept per server for viewers that open the console later.
 const CONSOLE_LINES: usize = 2000;
@@ -70,11 +84,36 @@ impl AppState {
         std::fs::create_dir_all(&config.data)?;
         let db = db::open(&config.data.join("hub.db"))?;
         let store = ObjectStore::new(config.data.join("objects"));
-        Ok(Self(Arc::new(Inner { db: Mutex::new(db), store, config, waiters: Mutex::default(), consoles: Mutex::default() })))
+        Ok(Self(Arc::new(Inner {
+            db: Mutex::new(db),
+            store,
+            config,
+            waiters: Mutex::default(),
+            consoles: Mutex::default(),
+            failures: Mutex::default(),
+            failures_swept: AtomicI64::default(),
+        })))
     }
 
     pub fn db(&self) -> MutexGuard<'_, Connection> {
         self.0.db.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Runs `f` on a username's failed sign in count, restarting it once its window is over.
+    /// Expired entries are swept at most once a minute, not on every sign in.
+    fn failures<T>(&self, user: &str, f: impl FnOnce(&mut (u32, i64)) -> T) -> T {
+        let mut all = self.failures.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now();
+        // Read and written only under the `failures` lock.
+        if now - self.failures_swept.load(Ordering::Relaxed) >= 60 {
+            all.retain(|_, (_, since)| now - *since < FAILURE_WINDOW);
+            self.failures_swept.store(now, Ordering::Relaxed);
+        }
+        let entry = all.entry(user.to_string()).or_insert((0, now));
+        if now - entry.1 >= FAILURE_WINDOW {
+            *entry = (0, now);
+        }
+        f(entry)
     }
 
     fn waiter(&self, server: &str) -> Arc<Notify> {
@@ -152,11 +191,17 @@ async fn register(State(s): State<AppState>, Json(c): Json<Credentials>) -> Resu
     if c.password.len() < 8 {
         return Err(Error::bad("password must be at least 8 characters"));
     }
-    let pw = hash_password(&c.password)?;
+    let taken = |db: &Connection| -> Result<bool> {
+        Ok(db.query_row("select 1 from users where username = ?1", params![username], |_| Ok(())).optional()?.is_some())
+    };
+    // Checked before hashing too, so repeat requests for a taken name cost no Argon2 work.
+    if taken(&s.db())? {
+        return Err(Error::conflict("that username is taken"));
+    }
+    let pw = argon(ArgonSlot::take()?, move || hash_password(&c.password)).await??;
     let db = s.db();
     let id = new_id();
-    let taken = db.query_row("select 1 from users where username = ?1", params![username], |_| Ok(())).optional()?.is_some();
-    if taken {
+    if taken(&db)? {
         return Err(Error::conflict("that username is taken"));
     }
     db.execute("insert into users (id, username, pw_hash, created) values (?1, ?2, ?3, ?4)", params![id, username, pw, now()])?;
@@ -164,22 +209,105 @@ async fn register(State(s): State<AppState>, Json(c): Json<Credentials>) -> Resu
     Ok(Json(AuthResponse { token, user: User { id, username: username.into() } }))
 }
 
+/// One Argon2 run per CPU at a time: each takes tens of milliseconds and ~19 MiB, so a flood of
+/// sign ins or registrations queues here instead of exhausting the host.
+static ARGON: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get()))));
+
+/// Sign ins and registrations allowed to wait for [`ARGON`] at once; past that the hub answers
+/// 503 right away instead of holding more requests (and their bodies) in memory.
+const MAX_ARGON_WAITING: usize = 32;
+static ARGON_WAITING: AtomicUsize = AtomicUsize::new(0);
+
+/// A place in the queue for [`ARGON`], taken before anything else is recorded so a busy hub
+/// turns requests away without counting them (or remembering their usernames).
+struct ArgonSlot;
+
+impl ArgonSlot {
+    fn take() -> Result<Self> {
+        if ARGON_WAITING.fetch_add(1, Ordering::Relaxed) >= MAX_ARGON_WAITING {
+            ARGON_WAITING.fetch_sub(1, Ordering::Relaxed);
+            return Err(Error(StatusCode::SERVICE_UNAVAILABLE, "the hub is busy, try again shortly".into()));
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for ArgonSlot {
+    fn drop(&mut self) {
+        ARGON_WAITING.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Runs Argon2 on the blocking pool, so it never stalls an async worker (and, under the DB lock,
+/// every request). The permit lives as long as the work. If the request is dropped before the job
+/// starts, the job is cancelled, so it never runs (or counts an attempt) for nobody.
+async fn argon<T: Send + 'static>(slot: ArgonSlot, f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+    impl<T> Drop for AbortOnDrop<T> {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let permit = ARGON.clone().acquire_owned().await.map_err(anyhow::Error::from)?;
+    drop(slot);
+    let mut job = AbortOnDrop(tokio::task::spawn_blocking(move || {
+        let out = f();
+        drop(permit);
+        out
+    }));
+    (&mut job.0).await.map_err(|e| anyhow::Error::from(e).into())
+}
+
+/// Checked against when the username doesn't exist, so unknown names cost the same time as real
+/// ones and don't reveal which accounts exist.
+static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| hash_password("not a real password").unwrap_or_default());
+
 /// Checks a username/password pair (also used by the /device web page).
-pub fn check_credentials(s: &AppState, c: &Credentials) -> Result<User> {
-    let db = s.db();
-    let row: Option<(String, String, String)> = db
-        .query_row("select id, username, pw_hash from users where username = ?1", params![c.username.trim()], |r| {
+pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
+    let wrong = || Error(StatusCode::UNAUTHORIZED, "wrong username or password".into());
+    let name = c.username.trim().to_string();
+    // No account can have an invalid name, so this reveals nothing and keeps junk out of `failures`.
+    if !valid_username(&name) {
+        return Err(wrong());
+    }
+    // Usernames match case-insensitively (`collate nocase`), so the limit must too.
+    let key = name.to_ascii_lowercase();
+    let row: Option<(String, String, String)> = s
+        .db()
+        .query_row("select id, username, pw_hash from users where username = ?1", params![name], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?;
-    match row {
-        Some((id, username, hash)) if verify_password(&c.password, &hash) => Ok(User { id, username }),
-        _ => Err(Error(StatusCode::UNAUTHORIZED, "wrong username or password".into())),
+    let slot = ArgonSlot::take()?;
+    let hash = row.as_ref().map(|(_, _, h)| h.clone());
+    let state = s.clone();
+    // Counted inside the job, right before the check: parallel guesses can't all slip in under
+    // the limit, and a request turned away or dropped while queued never costs an attempt.
+    let verdict = argon(slot, move || {
+        let allowed = state.failures(&key, |(count, _)| {
+            *count += 1;
+            *count <= MAX_FAILURES
+        });
+        if !allowed {
+            return None;
+        }
+        let ok = verify_password(&c.password, hash.as_deref().unwrap_or(&DUMMY_HASH)) && hash.is_some();
+        if ok {
+            state.failures.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+        }
+        Some(ok)
+    })
+    .await?;
+    match (verdict, row) {
+        (None, _) => Err(Error(StatusCode::TOO_MANY_REQUESTS, "too many wrong passwords, try again in 15 minutes".into())),
+        (Some(true), Some((id, username, _))) => Ok(User { id, username }),
+        _ => Err(wrong()),
     }
 }
 
 async fn login(State(s): State<AppState>, Json(c): Json<Credentials>) -> Result<Json<AuthResponse>> {
-    let user = check_credentials(&s, &c)?;
+    let user = check_credentials(&s, c).await?;
     let token = issue_token(&s.db(), &user.id, "login")?;
     Ok(Json(AuthResponse { token, user }))
 }

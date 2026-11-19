@@ -10,7 +10,8 @@ use beacon_core::{
 };
 use std::{
     fs,
-    path::{Path, PathBuf},
+    io::Read,
+    path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
 
@@ -147,9 +148,10 @@ fn find(server: &Path, id: &str) -> Result<Backup> {
 
 /// Left out of BeaconSync backups: caches, logs, other backups (and their retention rule) and
 /// files being written.
-/// `world` is the world folder, always kept even if its name contains "backup".
+/// `world` is the world's top folder, always kept even if its name contains "backup".
 fn skip(server: &Path, world: &str, rel: &Path) -> bool {
-    let s = rel.to_string_lossy();
+    // Forward slashes on every OS, so the prefixes below also match Windows paths.
+    let s = rel.to_string_lossy().replace('\\', "/");
     let top = rel.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
     s.starts_with(".beacon/backup")
         || s.starts_with(".beacon/objects")
@@ -170,22 +172,48 @@ pub fn create(server: &Path, note: &str) -> Result<Backup> {
     fs::create_dir_all(&dir)?;
     let slug: String = note.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' { c } else { '-' }).collect();
     let name = format!("{}-{}.tar.gz", beacon_core::now(), slug.trim_matches('-'));
-    let tmp = dir.join(format!("{name}.part"));
+    // Unique per call, so concurrent backups never share (or delete) each other's temp file.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!("{name}.{}-{seq}.part", std::process::id()));
     {
-        let enc = flate2::write::GzEncoder::new(fs::File::create(&tmp)?, flate2::Compression::fast());
-        let mut tar = tar::Builder::new(enc);
-        tar.follow_symlinks(false);
-        let world = level_name(server);
-        let walk = walkdir::WalkDir::new(server).min_depth(1).into_iter();
-        for e in walk.filter_entry(|e| !skip(server, &world, e.path().strip_prefix(server).unwrap_or(e.path()))) {
-            let e = e?;
-            if e.file_type().is_file() {
-                tar.append_path_with_name(e.path(), e.path().strip_prefix(server)?)?;
-            }
+        // Owner-only on Unix: the archive holds `.beacon/server.json` and its hub token. Created
+        // exclusively, so nothing already at that path is ever reused.
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
         }
-        tar.into_inner()?.finish()?;
+        let enc = flate2::write::GzEncoder::new(options.open(&tmp)?, flate2::Compression::fast());
+        let written = (|| -> Result<()> {
+            let mut tar = tar::Builder::new(enc);
+            tar.follow_symlinks(false);
+            // The world's top folder, normalized like restore's `world_dir` (`world/` is `world`),
+            // so the world restore clears is always one the backup kept, even when its name
+            // contains "backup".
+            let world = level_name(server);
+            let world = world_rel(&world)
+                .and_then(|w| w.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()))
+                .unwrap_or(world);
+            let walk = walkdir::WalkDir::new(server).min_depth(1).into_iter();
+            for e in walk.filter_entry(|e| !skip(server, &world, e.path().strip_prefix(server).unwrap_or(e.path()))) {
+                let e = e?;
+                if e.file_type().is_file() {
+                    tar.append_path_with_name(e.path(), e.path().strip_prefix(server)?)?;
+                }
+            }
+            tar.into_inner()?.finish()?;
+            fs::rename(&tmp, dir.join(&name))?;
+            Ok(())
+        })();
+        // A failed backup (disk full, say) must not leave a partial archive outside retention.
+        if written.is_err() {
+            fs::remove_file(&tmp).ok();
+        }
+        written?;
     }
-    fs::rename(&tmp, dir.join(&name))?;
     find(server, &rel(server, &dir.join(name)))
 }
 
@@ -234,52 +262,216 @@ fn level_name(server: &Path) -> String {
         .unwrap_or_else(|| "world".into())
 }
 
-/// Restores a backup. Minecraft must be stopped. Whole server backups replace the pack files
-/// and worlds; mod backups replace only the world they contain.
+/// `name` as one plain folder name (not `..`, `.`, an absolute path or a nested one): the single
+/// top folder of a mod-made backup. Callers join the returned part, not `name`, so a trailing `/`
+/// can't make deletion follow a symlinked folder.
+fn one_folder(name: &str) -> Option<&std::ffi::OsStr> {
+    let mut parts = Path::new(name).components();
+    match (parts.next(), parts.next()) {
+        (Some(Component::Normal(part)), None) => Some(part),
+        _ => None,
+    }
+}
+
+/// `level-name` as a relative path of plain folder names (`world`, `./worlds/survival/`),
+/// rebuilt from its parts. `None` for `..`, a root or a drive (on Windows also a drive inside a
+/// later part, `worlds/D:x`, which would join as a drive): the world must sit inside the server.
+fn world_rel(name: &str) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for part in Path::new(name).components() {
+        match part {
+            Component::CurDir => {}
+            Component::Normal(p) if !(cfg!(windows) && p.to_string_lossy().contains(':')) => out.push(p),
+            _ => return None,
+        }
+    }
+    (!out.as_os_str().is_empty()).then_some(out)
+}
+
+/// The world folder a restore clears, refused unless it sits inside the server.
+fn world_dir(server: &Path) -> Result<PathBuf> {
+    let name = level_name(server);
+    let rel =
+        world_rel(&name).with_context(|| format!("level-name {name:?} in server.properties isn't a folder inside the server"))?;
+    Ok(server.join(rel))
+}
+
+/// The archive path, without `./` parts, when it names `.beacon/server.json` (the server's config,
+/// hub token included) in any letter case: on a case-insensitive disk every spelling is the live
+/// token. Callers write it under this spelling, so case-distinct files on other disks stay separate
+/// files, each owner-only.
+fn server_config_entry(path: &Path) -> Option<PathBuf> {
+    let parts: Vec<_> = path.components().filter(|c| !matches!(c, Component::CurDir)).collect();
+    match parts.as_slice() {
+        [Component::Normal(dir), Component::Normal(file)]
+            if dir.eq_ignore_ascii_case(".beacon") && file.eq_ignore_ascii_case("server.json") =>
+        {
+            Some(Path::new(dir).join(file))
+        }
+        _ => None,
+    }
+}
+
+/// Removes a world folder before a restore. Missing is fine; anything else stops the restore.
+fn clear(dir: &Path) -> Result<()> {
+    match fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e).with_context(|| format!("clearing {}", dir.display())),
+        _ => Ok(()),
+    }
+}
+
+/// A restore worked out by [`plan`], every check passed, before anything is deleted.
+pub struct Plan {
+    id: String,
+    /// Opened before the checks and extracted from in [`apply`], so the archive that was checked
+    /// is the one restored even if a backup mod deletes or replaces the file in between.
+    archive: fs::File,
+    kind: PlanKind,
+}
+
+enum PlanKind {
+    /// A whole server backup: `dest` is the canonical server folder.
+    Full { dest: PathBuf, world: PathBuf },
+    /// A mod-made world backup, unpacked into `dest` after clearing `old`.
+    World { zip: bool, dest: PathBuf, old: PathBuf },
+}
+
+impl Plan {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// Restores a backup: [`plan`], then [`apply`]. Minecraft must be stopped. Whole server backups
+/// replace the pack files and worlds; mod backups replace only the world they contain.
 pub fn restore(server: &Path, id: &str) -> Result<()> {
+    apply(server, plan(server, id)?)
+}
+
+/// The server token's folder, refused if it is a link: the token is only ever written into a real
+/// folder inside the server.
+fn refuse_link(dest: &Path, token: &Path) -> Result<()> {
+    let dir = dest.join(token.parent().unwrap_or(token));
+    if fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!("{} is a link; not restoring the server token through it", dir.display());
+    }
+    Ok(())
+}
+
+/// Every check a restore makes, without changing anything: safe to run while Minecraft is up, so
+/// a bad backup is refused before the server is stopped or a safety backup is taken.
+pub fn plan(server: &Path, id: &str) -> Result<Plan> {
     let b = find(server, id)?;
     let file = server.join(&b.id);
+    let archive = fs::File::open(&file)?;
     if b.full {
-        if let Some(tree) = srv::applied_tree(server) {
-            for p in tree.files.keys() {
-                fs::remove_file(server.join(p)).ok();
-            }
+        // Canonical like `Archive::unpack`, which also gives Windows its long path prefix.
+        let dest = server.canonicalize()?;
+        let world = world_dir(server)?;
+        let tokens = check_full_archive(archive.try_clone()?)?;
+        for t in &tokens {
+            refuse_link(&dest, t)?;
         }
-        // Chunks generated after the backup would otherwise survive the restore.
-        fs::remove_dir_all(server.join(level_name(server))).ok();
-        tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?)).unpack(server)?;
-        return Ok(());
+        return Ok(Plan { id: b.id, archive, kind: PlanKind::Full { dest, world } });
     }
     let name = b.id.to_ascii_lowercase();
     if name.contains("incremental") || name.contains("differential") {
         bail!("{} only holds changes since an earlier backup; restore it from {} itself", b.note, b.source);
     }
-    let entries = archive_entries(&file)?;
+    let zip = file.to_string_lossy().to_ascii_lowercase().ends_with(".zip");
+    // Read through the kept handle, so the layout checked is the layout extracted.
+    let entries = archive_entries(archive.try_clone()?, zip)?;
     // Either the world's files at the root, or one folder holding them.
-    let (dest, clear) = if entries.iter().any(|e| e == "level.dat") {
-        let world = server.join(level_name(server));
+    let (dest, old) = if entries.iter().any(|e| e == "level.dat") {
+        let world = world_dir(server)?;
         (world.clone(), world)
-    } else if let Some(top) = entries.iter().find_map(|e| e.strip_suffix("/level.dat").filter(|t| !t.contains('/'))) {
+    } else if let Some(top) = entries.iter().find_map(|e| e.strip_suffix("/level.dat").and_then(one_folder)) {
         (server.to_path_buf(), server.join(top))
     } else {
         bail!("{} doesn't look like a world backup (no level.dat)", b.note);
     };
-    fs::remove_dir_all(&clear).ok();
+    Ok(Plan { id: b.id, archive, kind: PlanKind::World { zip, dest, old } })
+}
+
+/// Carries out a [`plan`]. Minecraft must be stopped.
+pub fn apply(server: &Path, plan: Plan) -> Result<()> {
+    use std::io::{Seek, SeekFrom};
+    let mut archive = plan.archive;
+    // The checks read through a clone of this handle, which shares its position.
+    archive.seek(SeekFrom::Start(0))?;
+    let (zip, dest, old) = match plan.kind {
+        PlanKind::World { zip, dest, old } => (zip, dest, old),
+        PlanKind::Full { dest, world } => {
+            // Chunks generated after the backup would otherwise survive, so a world that can't be
+            // cleared stops the restore.
+            clear(&world)?;
+            if let Some(tree) = srv::applied_tree(server) {
+                for p in tree.files.keys() {
+                    fs::remove_file(server.join(p)).ok();
+                }
+            }
+            let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+            for entry in archive.entries()? {
+                let mut entry = entry?;
+                // The server token goes back owner-only from the start, never through a default
+                // mode, and only into the server's own `.beacon` folder.
+                if let Some(rel) = server_config_entry(&entry.path()?) {
+                    // Checked again right before writing, in case the archive created the link.
+                    refuse_link(&dest, &rel)?;
+                    let mut bytes = vec![];
+                    entry.read_to_end(&mut bytes)?;
+                    beacon_core::store::write_private(&dest.join(rel), &bytes)?;
+                } else {
+                    entry.unpack_in(&dest)?;
+                }
+            }
+            return Ok(());
+        }
+    };
+    clear(&old)?;
     fs::create_dir_all(&dest)?;
-    if b.id.to_ascii_lowercase().ends_with(".zip") {
-        zip::ZipArchive::new(fs::File::open(&file)?)?.extract(&dest)?;
+    if zip {
+        zip::ZipArchive::new(archive)?.extract(&dest)?;
     } else {
-        tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(&file)?)).unpack(&dest)?;
+        tar::Archive::new(flate2::read::GzDecoder::new(archive)).unpack(&dest)?;
     }
     Ok(())
 }
 
-fn archive_entries(file: &Path) -> Result<Vec<String>> {
-    if file.to_string_lossy().to_ascii_lowercase().ends_with(".zip") {
-        let z = zip::ZipArchive::new(fs::File::open(file)?)?;
-        return Ok(z.file_names().map(|n| n.trim_start_matches("./").to_string()).collect());
+/// Reads a whole server archive before a restore touches anything, returning the spellings of its
+/// token entries. Refuses a truncated or corrupted backup (every entry, then the rest of the gzip
+/// stream so its checksum is checked: tar stops at its end marker) and a link entry where the
+/// token's folder would be.
+fn check_full_archive(file: fs::File) -> Result<Vec<PathBuf>> {
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let mut tokens = vec![];
+    for entry in tar.entries()? {
+        let entry = entry?;
+        let path = entry.path()?;
+        // BeaconSync writes relative paths only; tar would strip a root or drive and land these
+        // somewhere the checks below don't look.
+        if path.components().any(|c| matches!(c, Component::RootDir | Component::Prefix(_) | Component::ParentDir)) {
+            bail!("the backup has an unexpected path {}", path.display());
+        }
+        let kind = entry.header().entry_type();
+        if (kind.is_symlink() || kind.is_hard_link()) && server_config_entry(&path.join("server.json")).is_some() {
+            bail!("the backup links {}; not restoring the server token through it", path.display());
+        }
+        tokens.extend(server_config_entry(&path));
     }
-    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?));
+    std::io::copy(&mut tar.into_inner(), &mut std::io::sink()).context("the backup is damaged")?;
+    Ok(tokens)
+}
+
+fn archive_entries(file: fs::File, zip: bool) -> Result<Vec<String>> {
+    if zip {
+        let z = zip::ZipArchive::new(file)?;
+        return Ok(z
+            .file_names()
+            .map(|n| n.map(|n| n.trim_start_matches("./").to_string()))
+            .collect::<zip::result::ZipResult<_>>()?);
+    }
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
     let mut out = vec![];
     for e in tar.entries()? {
         out.push(e?.path()?.to_string_lossy().trim_start_matches("./").to_string());
@@ -290,6 +482,12 @@ fn archive_entries(file: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entries(tar_gz: &Path) -> Vec<String> {
+        archive_entries(fs::File::open(tar_gz).unwrap(), false).unwrap()
+    }
+
+    const SERVER_CONFIG: &str = ".beacon/server.json";
     use std::io::Write;
 
     fn server() -> PathBuf {
@@ -309,6 +507,8 @@ mod tests {
     #[test]
     fn full_backup_round_trips_and_leaves_newer_chunks_out() {
         let d = server();
+        fs::create_dir_all(d.join(".beacon")).unwrap();
+        fs::write(d.join(SERVER_CONFIG), "{\"token\":\"secret\"}").unwrap();
         let b = create(&d, "before 1.4").unwrap();
         assert_eq!((b.source.as_str(), b.note.as_str(), b.full), ("BeaconSync", "before 1.4", true));
         fs::write(d.join("world/level.dat"), "new").unwrap();
@@ -316,6 +516,91 @@ mod tests {
         restore(&d, &b.id).unwrap();
         assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "old");
         assert!(!d.join("world/region/r.0.0.mca").exists());
+        // The archive and the restored token are owner-only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&d.join(&b.id)), 0o600);
+            assert_eq!(mode(&d.join(SERVER_CONFIG)), 0o600);
+        }
+        assert_eq!(fs::read_to_string(d.join(SERVER_CONFIG)).unwrap(), "{\"token\":\"secret\"}");
+        fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn a_world_named_like_a_backup_folder_is_still_backed_up() {
+        let d = server();
+        fs::create_dir_all(d.join("backup-world")).unwrap();
+        fs::write(d.join("backup-world/level.dat"), "mine").unwrap();
+        fs::write(d.join("server.properties"), "level-name=backup-world/\n").unwrap();
+        let b = create(&d, "x").unwrap();
+        assert!(entries(&d.join(&b.id)).iter().any(|e| e == "backup-world/level.dat"));
+        fs::write(d.join("backup-world/level.dat"), "newer").unwrap();
+        restore(&d, &b.id).unwrap();
+        assert_eq!(fs::read_to_string(d.join("backup-world/level.dat")).unwrap(), "mine");
+        fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn broken_or_linking_full_backups_are_refused() {
+        let d = server();
+        let good = create(&d, "good").unwrap();
+        let own = own_dir(&d);
+        // Truncated: refused before the world is touched.
+        let bytes = fs::read(d.join(&good.id)).unwrap();
+        fs::write(own.join("1-truncated.tar.gz"), &bytes[..bytes.len() / 2]).unwrap();
+        assert!(find(&d, ".beacon/backups/1-truncated.tar.gz").unwrap().full);
+        assert!(plan(&d, ".beacon/backups/1-truncated.tar.gz").is_err(), "refused by the checks alone");
+        // Only the gzip footer missing, or one flipped byte: tar alone would read these fine.
+        fs::write(own.join("1-footerless.tar.gz"), &bytes[..bytes.len() - 8]).unwrap();
+        assert!(restore(&d, ".beacon/backups/1-footerless.tar.gz").is_err());
+        let mut flipped = bytes.clone();
+        let len = flipped.len();
+        flipped[len - 5] ^= 0xff;
+        fs::write(own.join("1-flipped.tar.gz"), &flipped).unwrap();
+        assert!(restore(&d, ".beacon/backups/1-flipped.tar.gz").is_err());
+        assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "old");
+        // A `.Beacon` link made by the archive itself is never written through.
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!("beacon-outside-{}", rand_suffix()));
+            fs::create_dir_all(&outside).unwrap();
+            let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+                fs::File::create(own.join("2-linking.tar.gz")).unwrap(),
+                flate2::Compression::fast(),
+            ));
+            let mut link = tar::Header::new_gnu();
+            link.set_entry_type(tar::EntryType::Symlink);
+            link.set_size(0);
+            tar.append_link(&mut link, ".Beacon", &outside).unwrap();
+            let mut file = tar::Header::new_gnu();
+            file.set_size(2);
+            tar.append_data(&mut file, ".Beacon/server.json", &b"{}"[..]).unwrap();
+            tar.into_inner().unwrap().finish().unwrap();
+            assert!(find(&d, ".beacon/backups/2-linking.tar.gz").unwrap().full);
+            let err = restore(&d, ".beacon/backups/2-linking.tar.gz").unwrap_err().to_string();
+            assert!(err.contains("links"), "{err}");
+            assert!(!outside.join("server.json").exists());
+            assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "old", "refused before deleting");
+            // The same link spelled with a root (`/.beacon`), which tar would strip on unpack.
+            let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+                fs::File::create(own.join("3-rooted.tar.gz")).unwrap(),
+                flate2::Compression::fast(),
+            ));
+            let mut link = tar::Header::new_gnu();
+            link.as_gnu_mut().unwrap().name[..8].copy_from_slice(b"/.beacon");
+            link.set_entry_type(tar::EntryType::Symlink);
+            link.set_link_name(&outside).unwrap();
+            link.set_size(0);
+            link.set_cksum();
+            tar.append(&link, std::io::empty()).unwrap();
+            tar.into_inner().unwrap().finish().unwrap();
+            let err = plan(&d, ".beacon/backups/3-rooted.tar.gz").err().unwrap().to_string();
+            assert!(err.contains("unexpected path"), "{err}");
+            assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "old");
+            fs::remove_dir_all(outside).ok();
+        }
         fs::remove_dir_all(d).ok();
     }
 
@@ -336,10 +621,32 @@ mod tests {
         );
         // Our own backups leave mod backups out.
         let own = create(&d, "manual").unwrap();
-        assert!(!archive_entries(&d.join(own.id)).unwrap().iter().any(|e| e.starts_with("backups/")));
+        assert!(!entries(&d.join(&own.id)).iter().any(|e| e.starts_with("backups/")));
         restore(&d, &b.id).unwrap();
         assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "from mod");
         assert!(restore(&d, "../etc/passwd").is_err());
+        // An archive naming `..` as its world is refused before anything is cleared.
+        let mut z = zip::ZipWriter::new(fs::File::create(d.join("backups/escape.zip")).unwrap());
+        z.start_file("../level.dat", zip::write::SimpleFileOptions::default()).unwrap();
+        z.finish().unwrap();
+        assert!(restore(&d, "backups/escape.zip").is_err());
+        assert!(d.join("world/level.dat").exists());
+        // So is a server.properties pointing the world outside the server, and pack files survive.
+        let mut tree = beacon_core::model::Tree::default();
+        tree.files.insert("mods/pack.jar".into(), serde_json::from_value(serde_json::json!({ "hash": "x", "size": 0 })).unwrap());
+        fs::write(d.join(".beacon/server-tree.json"), serde_json::to_vec(&tree).unwrap()).unwrap();
+        fs::write(d.join("mods/pack.jar"), "").unwrap();
+        fs::write(d.join("server.properties"), "level-name=../elsewhere\n").unwrap();
+        assert!(restore(&d, &own.id).is_err());
+        assert!(d.join("world/level.dat").exists() && d.join("mods/pack.jar").exists(), "a refused restore deletes nothing");
+        assert_eq!(one_folder("world/"), Some(std::ffi::OsStr::new("world")));
+        assert_eq!(world_rel("worlds/survival/"), Some(PathBuf::from("worlds/survival")));
+        assert_eq!(world_rel("../x").or(world_rel("/abs")).or(world_rel(".")), None);
+        assert_eq!(world_rel("./worlds/survival"), Some(PathBuf::from("worlds/survival")));
+        assert_eq!(world_rel("worlds/D:x").is_none(), cfg!(windows));
+        assert_eq!(server_config_entry(Path::new("./.Beacon/Server.json")), Some(PathBuf::from(".Beacon/Server.json")));
+        assert_eq!(server_config_entry(Path::new("x/.beacon/server.json")), None);
+        fs::write(d.join("server.properties"), "level-name=world\n").unwrap();
         // Partial archives from incremental backups are refused rather than half restored.
         fs::copy(d.join("backups/2026-11-05.zip"), d.join("backups/incremental.zip")).unwrap();
         assert!(restore(&d, "backups/incremental.zip").is_err());
