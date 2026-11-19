@@ -1332,7 +1332,10 @@ async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut O
                 say("taking a safety backup first");
                 let safety = backups::create(&d, "before restore")?;
                 if let Err(e) = backups::restore(&d, &id) {
-                    backups::restore(&d, &safety.id)?;
+                    // Refused up front means nothing changed, so there is nothing to undo.
+                    if e.downcast_ref::<backups::Refused>().is_none() {
+                        backups::restore(&d, &safety.id)?;
+                    }
                     return Err(e);
                 }
                 backups::prune(&d);
