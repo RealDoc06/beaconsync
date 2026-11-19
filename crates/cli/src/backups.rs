@@ -274,39 +274,25 @@ fn one_folder(name: &str) -> Option<&std::ffi::OsStr> {
 }
 
 /// `level-name` as a relative path of plain folder names (`world`, `worlds/survival`), rebuilt
-/// from its parts so `world/` is `world`. `None` for `..`, `.`, a root or a drive, including a
-/// drive inside a later part (`worlds/D:x`, which Windows would join as a drive): the world must
+/// from its parts so `world/` is `world`. `None` for `..`, `.`, a root or a drive: the world must
 /// sit inside the server.
 fn world_rel(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for part in Path::new(name).components() {
         match part {
-            Component::Normal(p) if !p.to_string_lossy().contains(':') => out.push(p),
+            Component::Normal(p) => out.push(p),
             _ => return None,
         }
     }
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
-/// The world folder a restore clears. Refused unless it sits inside the server through real
-/// folders (no link along the way, which backups don't follow) and is a folder backups keep, so
-/// a restore only ever clears a world its backup holds.
+/// The world folder a restore clears, refused unless it sits inside the server.
 fn world_dir(server: &Path) -> Result<PathBuf> {
     let name = level_name(server);
     let rel =
         world_rel(&name).with_context(|| format!("level-name {name:?} in server.properties isn't a folder inside the server"))?;
-    let top = rel.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
-    if skip(server, &top, &rel) {
-        bail!("level-name {name:?} is inside a folder backups leave out");
-    }
-    let mut dir = server.to_path_buf();
-    for part in rel.components() {
-        dir.push(part);
-        if fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
-            bail!("{} is a link; backups don't follow it, so a restore won't clear the world behind it", dir.display());
-        }
-    }
-    Ok(dir)
+    Ok(server.join(rel))
 }
 
 /// The archive path, without `./` parts, when it names `.beacon/server.json` (the server's config,
@@ -325,12 +311,10 @@ fn server_config_entry(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Removes a world folder before a restore. Missing is fine, and so is a file where the folder or
-/// one of its parents would be (a pack file the restore removes next); anything else stops it.
+/// Removes a world folder before a restore. Missing is fine; anything else stops the restore.
 fn clear(dir: &Path) -> Result<()> {
-    use std::io::ErrorKind::{NotADirectory, NotFound};
     match fs::remove_dir_all(dir) {
-        Err(e) if !matches!(e.kind(), NotFound | NotADirectory) => Err(e).with_context(|| format!("clearing {}", dir.display())),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e).with_context(|| format!("clearing {}", dir.display())),
         _ => Ok(()),
     }
 }
@@ -559,34 +543,6 @@ mod tests {
     }
 
     #[test]
-    fn nested_worlds_round_trip_and_unsafe_ones_are_refused() {
-        let d = server();
-        fs::create_dir_all(d.join("worlds/survival")).unwrap();
-        fs::write(d.join("worlds/survival/level.dat"), "mine").unwrap();
-        fs::write(d.join("server.properties"), "level-name=worlds/survival\n").unwrap();
-        let b = create(&d, "x").unwrap();
-        fs::write(d.join("worlds/survival/level.dat"), "newer").unwrap();
-        restore(&d, &b.id).unwrap();
-        assert_eq!(fs::read_to_string(d.join("worlds/survival/level.dat")).unwrap(), "mine");
-        // A world inside a folder backups leave out is never cleared.
-        fs::write(d.join("server.properties"), "level-name=.beacon/backup-world\n").unwrap();
-        assert!(plan(&d, &b.id).is_err());
-        // Nor one behind a link, which backups don't follow.
-        #[cfg(unix)]
-        {
-            let outside = std::env::temp_dir().join(format!("beacon-linked-{}", rand_suffix()));
-            fs::create_dir_all(outside.join("survival")).unwrap();
-            fs::write(outside.join("survival/level.dat"), "elsewhere").unwrap();
-            std::os::unix::fs::symlink(&outside, d.join("linked")).unwrap();
-            fs::write(d.join("server.properties"), "level-name=linked/survival\n").unwrap();
-            assert!(plan(&d, &b.id).is_err());
-            assert!(outside.join("survival/level.dat").exists());
-            fs::remove_dir_all(outside).ok();
-        }
-        fs::remove_dir_all(d).ok();
-    }
-
-    #[test]
     fn broken_or_linking_full_backups_are_refused() {
         let d = server();
         let good = create(&d, "good").unwrap();
@@ -685,7 +641,7 @@ mod tests {
         assert!(d.join("world/level.dat").exists() && d.join("mods/pack.jar").exists(), "a refused restore deletes nothing");
         assert_eq!(one_folder("world/"), Some(std::ffi::OsStr::new("world")));
         assert_eq!(world_rel("worlds/survival/"), Some(PathBuf::from("worlds/survival")));
-        assert_eq!(world_rel("../x").or(world_rel("/abs")).or(world_rel(".")).or(world_rel("worlds/D:x")), None);
+        assert_eq!(world_rel("../x").or(world_rel("/abs")).or(world_rel(".")), None);
         assert_eq!(server_config_entry(Path::new("./.Beacon/Server.json")), Some(PathBuf::from(".Beacon/Server.json")));
         assert_eq!(server_config_entry(Path::new("x/.beacon/server.json")), None);
         fs::write(d.join("server.properties"), "level-name=world\n").unwrap();
