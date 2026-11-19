@@ -152,7 +152,7 @@ async fn register(State(s): State<AppState>, Json(c): Json<Credentials>) -> Resu
     if c.password.len() < 8 {
         return Err(Error::bad("password must be at least 8 characters"));
     }
-    let pw = hash_password(&c.password)?;
+    let pw = argon(move || hash_password(&c.password)).await??;
     let db = s.db();
     let id = new_id();
     let taken = db.query_row("select 1 from users where username = ?1", params![username], |_| Ok(())).optional()?.is_some();
@@ -164,22 +164,30 @@ async fn register(State(s): State<AppState>, Json(c): Json<Credentials>) -> Resu
     Ok(Json(AuthResponse { token, user: User { id, username: username.into() } }))
 }
 
+/// Runs Argon2 on the blocking pool: it takes tens of milliseconds of CPU, which would otherwise
+/// stall an async worker (and, under the DB lock, every request).
+async fn argon<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f).await.map_err(|e| anyhow::Error::from(e).into())
+}
+
 /// Checks a username/password pair (also used by the /device web page).
-pub fn check_credentials(s: &AppState, c: &Credentials) -> Result<User> {
-    let db = s.db();
-    let row: Option<(String, String, String)> = db
+pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
+    let row: Option<(String, String, String)> = s
+        .db()
         .query_row("select id, username, pw_hash from users where username = ?1", params![c.username.trim()], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?;
-    match row {
-        Some((id, username, hash)) if verify_password(&c.password, &hash) => Ok(User { id, username }),
-        _ => Err(Error(StatusCode::UNAUTHORIZED, "wrong username or password".into())),
+    let wrong = || Error(StatusCode::UNAUTHORIZED, "wrong username or password".into());
+    let (id, username, hash) = row.ok_or_else(wrong)?;
+    if !argon(move || verify_password(&c.password, &hash)).await? {
+        return Err(wrong());
     }
+    Ok(User { id, username })
 }
 
 async fn login(State(s): State<AppState>, Json(c): Json<Credentials>) -> Result<Json<AuthResponse>> {
-    let user = check_credentials(&s, &c)?;
+    let user = check_credentials(&s, c).await?;
     let token = issue_token(&s.db(), &user.id, "login")?;
     Ok(Json(AuthResponse { token, user }))
 }

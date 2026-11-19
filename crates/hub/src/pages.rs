@@ -80,7 +80,8 @@ pub struct DeviceForm {
 }
 
 pub async fn device_submit(State(s): State<AppState>, Form(f): Form<DeviceForm>) -> Html<String> {
-    let result = check_credentials(&s, &Credentials { username: f.username, password: f.password })
+    let result = check_credentials(&s, Credentials { username: f.username, password: f.password })
+        .await
         .and_then(|u| approve_device(&s, &u.id, &f.user_code));
     match result {
         Ok(()) => page("Approved", "<h1 class=\"ok\">Approved</h1><p>You can close this page and go back to the terminal.</p>"),
