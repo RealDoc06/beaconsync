@@ -37,7 +37,14 @@ pub struct Inner {
     waiters: Mutex<HashMap<String, Arc<Notify>>>,
     /// Live console and backups per server, kept in memory only.
     consoles: Mutex<HashMap<String, Console>>,
+    /// Failed sign ins per user id: (count, start of the window).
+    failures: Mutex<HashMap<String, (u32, i64)>>,
 }
+
+/// Wrong passwords allowed per account within [`FAILURE_WINDOW`] seconds before sign ins with a
+/// password are refused for the rest of it. Existing tokens keep working.
+const MAX_FAILURES: u32 = 10;
+const FAILURE_WINDOW: i64 = 15 * 60;
 
 /// Lines kept per server for viewers that open the console later.
 const CONSOLE_LINES: usize = 2000;
@@ -70,11 +77,26 @@ impl AppState {
         std::fs::create_dir_all(&config.data)?;
         let db = db::open(&config.data.join("hub.db"))?;
         let store = ObjectStore::new(config.data.join("objects"));
-        Ok(Self(Arc::new(Inner { db: Mutex::new(db), store, config, waiters: Mutex::default(), consoles: Mutex::default() })))
+        Ok(Self(Arc::new(Inner {
+            db: Mutex::new(db),
+            store,
+            config,
+            waiters: Mutex::default(),
+            consoles: Mutex::default(),
+            failures: Mutex::default(),
+        })))
     }
 
     pub fn db(&self) -> MutexGuard<'_, Connection> {
         self.0.db.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Runs `f` on a user's failed sign in count, restarting it once its window is over.
+    fn failures<T>(&self, user: &str, f: impl FnOnce(&mut (u32, i64)) -> T) -> T {
+        let mut all = self.failures.lock().unwrap_or_else(|e| e.into_inner());
+        let now = now();
+        all.retain(|_, (_, since)| now - *since < FAILURE_WINDOW);
+        f(all.entry(user.to_string()).or_insert((0, now)))
     }
 
     fn waiter(&self, server: &str) -> Arc<Notify> {
@@ -180,9 +202,18 @@ pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
         .optional()?;
     let wrong = || Error(StatusCode::UNAUTHORIZED, "wrong username or password".into());
     let (id, username, hash) = row.ok_or_else(wrong)?;
+    // Counted before checking, so parallel guesses can't all slip in under the limit.
+    let allowed = s.failures(&id, |(count, _)| {
+        *count += 1;
+        *count <= MAX_FAILURES
+    });
+    if !allowed {
+        return Err(Error(StatusCode::TOO_MANY_REQUESTS, "too many wrong passwords, try again in 15 minutes".into()));
+    }
     if !argon(move || verify_password(&c.password, &hash)).await? {
         return Err(wrong());
     }
+    s.failures.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     Ok(User { id, username })
 }
 
