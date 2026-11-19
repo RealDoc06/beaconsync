@@ -262,9 +262,9 @@ fn level_name(server: &Path) -> String {
         .unwrap_or_else(|| "world".into())
 }
 
-/// `name` as one plain folder name, so a restore only ever clears a folder directly inside the
-/// server (not `..`, `.`, an absolute path or a nested one). Callers join the returned part, not
-/// `name`, so a trailing `/` can't make deletion follow a symlinked folder.
+/// `name` as one plain folder name (not `..`, `.`, an absolute path or a nested one): the single
+/// top folder of a mod-made backup. Callers join the returned part, not `name`, so a trailing `/`
+/// can't make deletion follow a symlinked folder.
 fn one_folder(name: &str) -> Option<&std::ffi::OsStr> {
     let mut parts = Path::new(name).components();
     match (parts.next(), parts.next()) {
@@ -369,7 +369,6 @@ pub fn plan(server: &Path, id: &str) -> Result<Plan> {
         let dest = server.canonicalize()?;
         let world = world_dir(server)?;
         let tokens = check_full_archive(archive.try_clone()?)?;
-        refuse_link(&dest, Path::new(".beacon/server.json"))?;
         for t in &tokens {
             refuse_link(&dest, t)?;
         }

@@ -216,7 +216,7 @@ static ARGON: LazyLock<Arc<Semaphore>> =
 
 /// Sign ins and registrations allowed to wait for [`ARGON`] at once; past that the hub answers
 /// 503 right away instead of holding more requests (and their bodies) in memory.
-const MAX_ARGON_WAITING: usize = 256;
+const MAX_ARGON_WAITING: usize = 32;
 static ARGON_WAITING: AtomicUsize = AtomicUsize::new(0);
 
 /// A place in the queue for [`ARGON`], taken before anything else is recorded so a busy hub
