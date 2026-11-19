@@ -299,32 +299,29 @@ fn clear(dir: &Path) -> Result<()> {
     }
 }
 
-/// A restore error raised before any file changed: there is nothing to undo.
-#[derive(Debug)]
-pub struct Refused(String);
-
-impl std::fmt::Display for Refused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
+/// A restore worked out by [`plan`], every check passed, before anything is deleted.
+pub struct Plan {
+    id: String,
+    kind: PlanKind,
 }
 
-impl std::error::Error for Refused {}
-
-/// What a restore will do, worked out (and every check passed) before anything is deleted.
-enum Plan {
+enum PlanKind {
     /// A whole server backup: `dest` is the canonical server folder.
     Full { file: PathBuf, dest: PathBuf, world: PathBuf },
     /// A mod-made world backup, unpacked into `dest` after clearing `old`.
     World { file: PathBuf, dest: PathBuf, old: PathBuf },
 }
 
-/// Restores a backup. Minecraft must be stopped. Whole server backups replace the pack files
-/// and worlds; mod backups replace only the world they contain. Errors from the checks that run
-/// before anything is deleted come back as [`Refused`].
+impl Plan {
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// Restores a backup: [`plan`], then [`apply`]. Minecraft must be stopped. Whole server backups
+/// replace the pack files and worlds; mod backups replace only the world they contain.
 pub fn restore(server: &Path, id: &str) -> Result<()> {
-    let plan = plan(server, id).map_err(|e| anyhow::Error::new(Refused(format!("{e:#}"))))?;
-    apply(server, plan)
+    apply(server, plan(server, id)?)
 }
 
 /// The server token's folder, refused if it is a link: the token is only ever written into a real
@@ -337,7 +334,9 @@ fn refuse_link(dest: &Path, token: &Path) -> Result<()> {
     Ok(())
 }
 
-fn plan(server: &Path, id: &str) -> Result<Plan> {
+/// Every check a restore makes, without changing anything: safe to run while Minecraft is up, so
+/// a bad backup is refused before the server is stopped or a safety backup is taken.
+pub fn plan(server: &Path, id: &str) -> Result<Plan> {
     let b = find(server, id)?;
     let file = server.join(&b.id);
     if b.full {
@@ -349,7 +348,7 @@ fn plan(server: &Path, id: &str) -> Result<Plan> {
         for t in &tokens {
             refuse_link(&dest, t)?;
         }
-        return Ok(Plan::Full { file, dest, world });
+        return Ok(Plan { id: b.id, kind: PlanKind::Full { file, dest, world } });
     }
     let name = b.id.to_ascii_lowercase();
     if name.contains("incremental") || name.contains("differential") {
@@ -365,13 +364,14 @@ fn plan(server: &Path, id: &str) -> Result<Plan> {
     } else {
         bail!("{} doesn't look like a world backup (no level.dat)", b.note);
     };
-    Ok(Plan::World { file, dest, old })
+    Ok(Plan { id: b.id, kind: PlanKind::World { file, dest, old } })
 }
 
-fn apply(server: &Path, plan: Plan) -> Result<()> {
-    let (file, dest, old) = match plan {
-        Plan::World { file, dest, old } => (file, dest, old),
-        Plan::Full { file, dest, world } => {
+/// Carries out a [`plan`]. Minecraft must be stopped.
+pub fn apply(server: &Path, plan: Plan) -> Result<()> {
+    let (file, dest, old) = match plan.kind {
+        PlanKind::World { file, dest, old } => (file, dest, old),
+        PlanKind::Full { file, dest, world } => {
             // Chunks generated after the backup would otherwise survive, so a world that can't be
             // cleared stops the restore.
             clear(&world)?;
@@ -503,8 +503,7 @@ mod tests {
         let bytes = fs::read(d.join(&good.id)).unwrap();
         fs::write(own.join("1-truncated.tar.gz"), &bytes[..bytes.len() / 2]).unwrap();
         assert!(find(&d, ".beacon/backups/1-truncated.tar.gz").unwrap().full);
-        let err = restore(&d, ".beacon/backups/1-truncated.tar.gz").unwrap_err();
-        assert!(err.downcast_ref::<Refused>().is_some(), "refused up front, nothing to undo: {err:#}");
+        assert!(plan(&d, ".beacon/backups/1-truncated.tar.gz").is_err(), "refused by the checks alone");
         // Only the gzip footer missing, or one flipped byte: tar alone would read these fine.
         fs::write(own.join("1-footerless.tar.gz"), &bytes[..bytes.len() - 8]).unwrap();
         assert!(restore(&d, ".beacon/backups/1-footerless.tar.gz").is_err());
@@ -549,8 +548,8 @@ mod tests {
             link.set_cksum();
             tar.append(&link, std::io::empty()).unwrap();
             tar.into_inner().unwrap().finish().unwrap();
-            let err = restore(&d, ".beacon/backups/3-rooted.tar.gz").unwrap_err();
-            assert!(err.downcast_ref::<Refused>().is_some() && err.to_string().contains("unexpected path"), "{err:#}");
+            let err = plan(&d, ".beacon/backups/3-rooted.tar.gz").err().unwrap().to_string();
+            assert!(err.contains("unexpected path"), "{err}");
             assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "old");
             fs::remove_dir_all(outside).ok();
         }

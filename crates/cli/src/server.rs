@@ -1320,7 +1320,11 @@ async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut O
             say(format!("backup done: {} ({})", b.id, size(b.size)));
         }
         ServerAction::Restore(id) => {
-            say(format!("restoring {id}"));
+            // Checked while Minecraft still runs: a refused restore stops nothing, takes no safety
+            // backup and changes nothing.
+            let d = dir.to_path_buf();
+            let plan = tokio::task::spawn_blocking(move || backups::plan(&d, &id)).await??;
+            say(format!("restoring {}", plan.id()));
             if let Some(mut m) = mc.take() {
                 m.send("say [BeaconSync] Restoring a backup, back in a minute").await;
                 tokio::time::sleep(Duration::from_secs(3)).await;
@@ -1331,11 +1335,8 @@ async fn act(dir: &Path, cfg: &mut ServerConfig, agent: &Option<Hub>, mc: &mut O
             let restored = tokio::task::spawn_blocking(move || -> Result<()> {
                 say("taking a safety backup first");
                 let safety = backups::create(&d, "before restore")?;
-                if let Err(e) = backups::restore(&d, &id) {
-                    // Refused up front means nothing changed, so there is nothing to undo.
-                    if e.downcast_ref::<backups::Refused>().is_none() {
-                        backups::restore(&d, &safety.id)?;
-                    }
+                if let Err(e) = backups::apply(&d, plan) {
+                    backups::restore(&d, &safety.id).with_context(|| format!("{e:#}; undoing it failed too"))?;
                     return Err(e);
                 }
                 backups::prune(&d);
