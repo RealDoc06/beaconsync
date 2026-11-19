@@ -10,6 +10,7 @@ use beacon_core::{
 };
 use std::{
     fs,
+    io::Read,
     path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
@@ -171,11 +172,13 @@ pub fn create(server: &Path, note: &str) -> Result<Backup> {
     fs::create_dir_all(&dir)?;
     let slug: String = note.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' { c } else { '-' }).collect();
     let name = format!("{}-{}.tar.gz", beacon_core::now(), slug.trim_matches('-'));
-    let tmp = dir.join(format!("{name}.part"));
+    // Unique per call, so concurrent backups never share (or delete) each other's temp file.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!("{name}.{}-{seq}.part", std::process::id()));
     {
         // Owner-only on Unix: the archive holds `.beacon/server.json` and its hub token. Created
-        // exclusively, so a leftover `.part` with looser permissions is never reused.
-        fs::remove_file(&tmp).ok();
+        // exclusively, so nothing already at that path is ever reused.
         let mut options = fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -264,22 +267,43 @@ fn world_dir(server: &Path) -> Result<PathBuf> {
     Ok(server.join(part))
 }
 
+/// Where the server's config, hub token included, lives inside a whole server backup.
+const SERVER_CONFIG: &str = ".beacon/server.json";
+
+/// Removes a world folder before a restore. Missing is fine; anything else stops the restore.
+fn clear(dir: &Path) -> Result<()> {
+    match fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e).with_context(|| format!("clearing {}", dir.display())),
+        _ => Ok(()),
+    }
+}
+
 /// Restores a backup. Minecraft must be stopped. Whole server backups replace the pack files
 /// and worlds; mod backups replace only the world they contain.
 pub fn restore(server: &Path, id: &str) -> Result<()> {
     let b = find(server, id)?;
     let file = server.join(&b.id);
     if b.full {
-        // Checked first: a refused restore must leave the server as it was.
-        let world = world_dir(server)?;
+        // Checked first: a refused restore must leave the server as it was. Chunks generated
+        // after the backup would otherwise survive, so a world that can't be cleared stops it.
+        clear(&world_dir(server)?)?;
         if let Some(tree) = srv::applied_tree(server) {
             for p in tree.files.keys() {
                 fs::remove_file(server.join(p)).ok();
             }
         }
-        // Chunks generated after the backup would otherwise survive the restore.
-        fs::remove_dir_all(world).ok();
-        tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?)).unpack(server)?;
+        let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?));
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            // The server token goes back owner-only from the start, never through a default mode.
+            if entry.path()? == Path::new(SERVER_CONFIG) {
+                let mut bytes = vec![];
+                entry.read_to_end(&mut bytes)?;
+                beacon_core::store::write_private(&server.join(SERVER_CONFIG), &bytes)?;
+            } else {
+                entry.unpack_in(server)?;
+            }
+        }
         return Ok(());
     }
     let name = b.id.to_ascii_lowercase();
@@ -288,7 +312,7 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
     }
     let entries = archive_entries(&file)?;
     // Either the world's files at the root, or one folder holding them.
-    let (dest, clear) = if entries.iter().any(|e| e == "level.dat") {
+    let (dest, old) = if entries.iter().any(|e| e == "level.dat") {
         let world = world_dir(server)?;
         (world.clone(), world)
     } else if let Some(top) = entries.iter().find_map(|e| e.strip_suffix("/level.dat").and_then(one_folder)) {
@@ -296,7 +320,7 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
     } else {
         bail!("{} doesn't look like a world backup (no level.dat)", b.note);
     };
-    fs::remove_dir_all(&clear).ok();
+    clear(&old)?;
     fs::create_dir_all(&dest)?;
     if b.id.to_ascii_lowercase().ends_with(".zip") {
         zip::ZipArchive::new(fs::File::open(&file)?)?.extract(&dest)?;
@@ -344,6 +368,8 @@ mod tests {
     #[test]
     fn full_backup_round_trips_and_leaves_newer_chunks_out() {
         let d = server();
+        fs::create_dir_all(d.join(".beacon")).unwrap();
+        fs::write(d.join(SERVER_CONFIG), "{\"token\":\"secret\"}").unwrap();
         let b = create(&d, "before 1.4").unwrap();
         assert_eq!((b.source.as_str(), b.note.as_str(), b.full), ("BeaconSync", "before 1.4", true));
         fs::write(d.join("world/level.dat"), "new").unwrap();
@@ -351,6 +377,15 @@ mod tests {
         restore(&d, &b.id).unwrap();
         assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "old");
         assert!(!d.join("world/region/r.0.0.mca").exists());
+        // The archive and the restored token are owner-only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&d.join(&b.id)), 0o600);
+            assert_eq!(mode(&d.join(SERVER_CONFIG)), 0o600);
+        }
+        assert_eq!(fs::read_to_string(d.join(SERVER_CONFIG)).unwrap(), "{\"token\":\"secret\"}");
         fs::remove_dir_all(d).ok();
     }
 
