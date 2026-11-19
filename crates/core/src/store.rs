@@ -87,9 +87,9 @@ fn write_through_temp(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
     let dir = path.parent().context("path has no parent")?;
     fs::create_dir_all(dir)?;
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    // Short and independent of the target's name, so long file names still fit the 255 byte limit.
     let tmp = dir.join(format!(
-        ".{}.{}-{}-{nanos}.tmp",
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("obj"),
+        ".beacon-{}-{}-{nanos}.tmp",
         std::process::id(),
         SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     ));

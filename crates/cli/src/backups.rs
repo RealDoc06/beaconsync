@@ -276,9 +276,9 @@ fn world_dir(server: &Path) -> Result<PathBuf> {
 }
 
 /// The archive path, without `./` parts, when it names `.beacon/server.json` (the server's config,
-/// hub token included) in any letter case (on a
-/// case-insensitive disk every spelling is the live token). Callers write it under this spelling,
-/// so case-distinct files on other disks stay separate files, each owner-only.
+/// hub token included) in any letter case: on a case-insensitive disk every spelling is the live
+/// token. Callers write it under this spelling, so case-distinct files on other disks stay separate
+/// files, each owner-only.
 fn server_config_entry(path: &Path) -> Option<PathBuf> {
     let parts: Vec<_> = path.components().filter(|c| !matches!(c, Component::CurDir)).collect();
     match parts.as_slice() {
@@ -309,10 +309,19 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
         // Canonical like `Archive::unpack`, which also gives Windows its long path prefix.
         let dest = server.canonicalize()?;
         let world = world_dir(server)?;
-        let beacon = dest.join(".beacon");
-        let linked = || fs::symlink_metadata(&beacon).is_ok_and(|m| m.file_type().is_symlink());
-        if linked() {
-            bail!("{} is a link; not restoring the server token through it", beacon.display());
+        // Reading the whole archive first also refuses a truncated or corrupt backup up front.
+        let tokens: Vec<PathBuf> = archive_entries(&file)?.iter().filter_map(|e| server_config_entry(Path::new(e))).collect();
+        // The token is only ever written into a real folder inside the server, never through a link.
+        let refuse_link = |rel: &Path| -> Result<()> {
+            let dir = dest.join(rel.parent().unwrap_or(rel));
+            if fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
+                bail!("{} is a link; not restoring the server token through it", dir.display());
+            }
+            Ok(())
+        };
+        refuse_link(Path::new(".beacon/server.json"))?;
+        for rel in &tokens {
+            refuse_link(rel)?;
         }
         // Chunks generated after the backup would otherwise survive, so a world that can't be
         // cleared stops the restore.
@@ -329,9 +338,7 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
             // and only into the server's own `.beacon` folder.
             if let Some(rel) = server_config_entry(&entry.path()?) {
                 // Checked again right before writing, in case the archive itself created the link.
-                if linked() {
-                    bail!("{} is a link; not restoring the server token through it", beacon.display());
-                }
+                refuse_link(&rel)?;
                 let mut bytes = vec![];
                 entry.read_to_end(&mut bytes)?;
                 beacon_core::store::write_private(&dest.join(rel), &bytes)?;
@@ -423,6 +430,45 @@ mod tests {
             assert_eq!(mode(&d.join(SERVER_CONFIG)), 0o600);
         }
         assert_eq!(fs::read_to_string(d.join(SERVER_CONFIG)).unwrap(), "{\"token\":\"secret\"}");
+        fs::remove_dir_all(d).ok();
+    }
+
+    #[test]
+    fn broken_or_linking_full_backups_are_refused() {
+        let d = server();
+        let good = create(&d, "good").unwrap();
+        let own = own_dir(&d);
+        // Truncated: refused before the world is touched.
+        let bytes = fs::read(d.join(&good.id)).unwrap();
+        fs::write(own.join("1-truncated.tar.gz"), &bytes[..bytes.len() / 2]).unwrap();
+        assert!(find(&d, ".beacon/backups/1-truncated.tar.gz").unwrap().full);
+        assert!(restore(&d, ".beacon/backups/1-truncated.tar.gz").is_err());
+        assert_eq!(fs::read_to_string(d.join("world/level.dat")).unwrap(), "old");
+        // A `.Beacon` link made by the archive itself is never written through.
+        #[cfg(unix)]
+        {
+            let outside = std::env::temp_dir().join(format!("beacon-outside-{}", rand_suffix()));
+            fs::create_dir_all(&outside).unwrap();
+            let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(
+                fs::File::create(own.join("2-linking.tar.gz")).unwrap(),
+                flate2::Compression::fast(),
+            ));
+            let mut link = tar::Header::new_gnu();
+            link.set_entry_type(tar::EntryType::Symlink);
+            link.set_size(0);
+            tar.append_link(&mut link, ".Beacon", &outside).unwrap();
+            let mut file = tar::Header::new_gnu();
+            file.set_size(2);
+            tar.append_data(&mut file, ".Beacon/server.json", &b"{}"[..]).unwrap();
+            tar.into_inner().unwrap().finish().unwrap();
+            assert!(find(&d, ".beacon/backups/2-linking.tar.gz").unwrap().full);
+            let err = restore(&d, ".beacon/backups/2-linking.tar.gz").unwrap_err().to_string();
+            // Case-sensitive disks reach the link check; case-insensitive ones can't create `.Beacon`
+            // next to the real `.beacon` at all.
+            assert!(err.contains("is a link") || cfg!(target_os = "macos"), "{err}");
+            assert!(!outside.join("server.json").exists());
+            fs::remove_dir_all(outside).ok();
+        }
         fs::remove_dir_all(d).ok();
     }
 
