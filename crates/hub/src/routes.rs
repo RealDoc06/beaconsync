@@ -240,17 +240,23 @@ impl Drop for ArgonSlot {
 }
 
 /// Runs Argon2 on the blocking pool, so it never stalls an async worker (and, under the DB lock,
-/// every request). The permit lives as long as the work, even if the request is dropped.
+/// every request). The permit lives as long as the work. If the request is dropped before the job
+/// starts, the job is cancelled, so it never runs (or counts an attempt) for nobody.
 async fn argon<T: Send + 'static>(slot: ArgonSlot, f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+    impl<T> Drop for AbortOnDrop<T> {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
     let permit = ARGON.clone().acquire_owned().await.map_err(anyhow::Error::from)?;
     drop(slot);
-    tokio::task::spawn_blocking(move || {
+    let mut job = AbortOnDrop(tokio::task::spawn_blocking(move || {
         let out = f();
         drop(permit);
         out
-    })
-    .await
-    .map_err(|e| anyhow::Error::from(e).into())
+    }));
+    (&mut job.0).await.map_err(|e| anyhow::Error::from(e).into())
 }
 
 /// Checked against when the username doesn't exist, so unknown names cost the same time as real

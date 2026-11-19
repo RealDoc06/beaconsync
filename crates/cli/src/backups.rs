@@ -275,15 +275,20 @@ fn world_dir(server: &Path) -> Result<PathBuf> {
     Ok(server.join(part))
 }
 
-/// Where the server's config, hub token included, lives inside a whole server backup.
-const SERVER_CONFIG: &str = ".beacon/server.json";
-
-/// Whether an archive path names [`SERVER_CONFIG`], however it is spelled (`./`, or another case
-/// on a case-insensitive disk).
-fn is_server_config(path: &Path) -> bool {
+/// The archive path, without `./` parts, when it names `.beacon/server.json` (the server's config,
+/// hub token included) in any letter case (on a
+/// case-insensitive disk every spelling is the live token). Callers write it under this spelling,
+/// so case-distinct files on other disks stay separate files, each owner-only.
+fn server_config_entry(path: &Path) -> Option<PathBuf> {
     let parts: Vec<_> = path.components().filter(|c| !matches!(c, Component::CurDir)).collect();
-    matches!(parts.as_slice(), [Component::Normal(dir), Component::Normal(file)]
-        if dir.eq_ignore_ascii_case(".beacon") && file.eq_ignore_ascii_case("server.json"))
+    match parts.as_slice() {
+        [Component::Normal(dir), Component::Normal(file)]
+            if dir.eq_ignore_ascii_case(".beacon") && file.eq_ignore_ascii_case("server.json") =>
+        {
+            Some(Path::new(dir).join(file))
+        }
+        _ => None,
+    }
 }
 
 /// Removes a world folder before a restore. Missing is fine; anything else stops the restore.
@@ -300,28 +305,36 @@ pub fn restore(server: &Path, id: &str) -> Result<()> {
     let b = find(server, id)?;
     let file = server.join(&b.id);
     if b.full {
-        // Checked first: a refused restore must leave the server as it was. Chunks generated
-        // after the backup would otherwise survive, so a world that can't be cleared stops it.
-        clear(&world_dir(server)?)?;
+        // Everything that can refuse runs first: a refused restore must leave the server as it was.
+        // Canonical like `Archive::unpack`, which also gives Windows its long path prefix.
+        let dest = server.canonicalize()?;
+        let world = world_dir(server)?;
+        let beacon = dest.join(".beacon");
+        let linked = || fs::symlink_metadata(&beacon).is_ok_and(|m| m.file_type().is_symlink());
+        if linked() {
+            bail!("{} is a link; not restoring the server token through it", beacon.display());
+        }
+        // Chunks generated after the backup would otherwise survive, so a world that can't be
+        // cleared stops the restore.
+        clear(&world)?;
         if let Some(tree) = srv::applied_tree(server) {
             for p in tree.files.keys() {
                 fs::remove_file(server.join(p)).ok();
             }
         }
-        // Canonical like `Archive::unpack`, which also gives Windows its long path prefix.
-        let dest = server.canonicalize()?;
         let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(fs::File::open(file)?));
         for entry in archive.entries()? {
             let mut entry = entry?;
             // The server token goes back owner-only from the start, never through a default mode,
             // and only into the server's own `.beacon` folder.
-            if is_server_config(&entry.path()?) {
-                if fs::symlink_metadata(dest.join(".beacon")).is_ok_and(|m| m.file_type().is_symlink()) {
-                    bail!("{} is a link; not writing the server token through it", dest.join(".beacon").display());
+            if let Some(rel) = server_config_entry(&entry.path()?) {
+                // Checked again right before writing, in case the archive itself created the link.
+                if linked() {
+                    bail!("{} is a link; not restoring the server token through it", beacon.display());
                 }
                 let mut bytes = vec![];
                 entry.read_to_end(&mut bytes)?;
-                beacon_core::store::write_private(&dest.join(SERVER_CONFIG), &bytes)?;
+                beacon_core::store::write_private(&dest.join(rel), &bytes)?;
             } else {
                 entry.unpack_in(&dest)?;
             }
@@ -371,6 +384,8 @@ fn archive_entries(file: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SERVER_CONFIG: &str = ".beacon/server.json";
     use std::io::Write;
 
     fn server() -> PathBuf {
@@ -447,7 +462,8 @@ mod tests {
         assert!(restore(&d, &own.id).is_err());
         assert!(d.join("world/level.dat").exists() && d.join("mods/pack.jar").exists(), "a refused restore deletes nothing");
         assert_eq!(one_folder("world/"), Some(std::ffi::OsStr::new("world")));
-        assert!(is_server_config(Path::new("./.Beacon/Server.json")) && !is_server_config(Path::new("x/.beacon/server.json")));
+        assert_eq!(server_config_entry(Path::new("./.Beacon/Server.json")), Some(PathBuf::from(".Beacon/Server.json")));
+        assert_eq!(server_config_entry(Path::new("x/.beacon/server.json")), None);
         fs::write(d.join("server.properties"), "level-name=world\n").unwrap();
         // Partial archives from incremental backups are refused rather than half restored.
         fs::copy(d.join("backups/2026-11-05.zip"), d.join("backups/incremental.zip")).unwrap();
