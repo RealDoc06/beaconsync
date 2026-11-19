@@ -120,6 +120,9 @@ async fn wrong_passwords_lock_password_sign_in_for_a_while() {
     assert!(anon.login(&good).await.unwrap_err().to_string().contains("too many"));
     // Signed in clients are unaffected.
     assert!(Hub::new(&base, Some(auth.token)).library().await.is_ok());
+    // Other casings of the name are the same account and share the limit.
+    let shouted = Credentials { username: "DOC".into(), ..wrong.clone() };
+    assert!(anon.login(&shouted).await.unwrap_err().to_string().contains("too many"));
     // Unknown usernames are limited the same way, so guessing names gets no free attempts.
     let ghost = Credentials { username: "ghost".into(), password: "whatever1".into() };
     for _ in 0..10 {

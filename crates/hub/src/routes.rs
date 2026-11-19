@@ -21,7 +21,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    sync::{Arc, LazyLock, Mutex, MutexGuard},
+    sync::{
+        Arc, LazyLock, Mutex, MutexGuard,
+        atomic::{AtomicI64, AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 use tokio::sync::{Notify, Semaphore};
@@ -37,8 +40,10 @@ pub struct Inner {
     waiters: Mutex<HashMap<String, Arc<Notify>>>,
     /// Live console and backups per server, kept in memory only.
     consoles: Mutex<HashMap<String, Console>>,
-    /// Failed sign ins per username, existing or not: (count, start of the window).
+    /// Failed sign ins per lowercased username, existing or not: (count, start of the window).
     failures: Mutex<HashMap<String, (u32, i64)>>,
+    /// When `failures` last dropped expired entries.
+    failures_swept: AtomicI64,
 }
 
 /// Wrong passwords allowed per username within [`FAILURE_WINDOW`] seconds before sign ins with a
@@ -86,6 +91,7 @@ impl AppState {
             waiters: Mutex::default(),
             consoles: Mutex::default(),
             failures: Mutex::default(),
+            failures_swept: AtomicI64::default(),
         })))
     }
 
@@ -93,12 +99,21 @@ impl AppState {
         self.0.db.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Runs `f` on a user's failed sign in count, restarting it once its window is over.
+    /// Runs `f` on a username's failed sign in count, restarting it once its window is over.
+    /// Expired entries are swept at most once a minute, not on every sign in.
     fn failures<T>(&self, user: &str, f: impl FnOnce(&mut (u32, i64)) -> T) -> T {
         let mut all = self.failures.lock().unwrap_or_else(|e| e.into_inner());
         let now = now();
-        all.retain(|_, (_, since)| now - *since < FAILURE_WINDOW);
-        f(all.entry(user.to_string()).or_insert((0, now)))
+        // Read and written only under the `failures` lock.
+        if now - self.failures_swept.load(Ordering::Relaxed) >= 60 {
+            all.retain(|_, (_, since)| now - *since < FAILURE_WINDOW);
+            self.failures_swept.store(now, Ordering::Relaxed);
+        }
+        let entry = all.entry(user.to_string()).or_insert((0, now));
+        if now - entry.1 >= FAILURE_WINDOW {
+            *entry = (0, now);
+        }
+        f(entry)
     }
 
     fn waiter(&self, server: &str) -> Arc<Notify> {
@@ -199,10 +214,26 @@ async fn register(State(s): State<AppState>, Json(c): Json<Credentials>) -> Resu
 static ARGON: LazyLock<Arc<Semaphore>> =
     LazyLock::new(|| Arc::new(Semaphore::new(std::thread::available_parallelism().map_or(2, |n| n.get()))));
 
+/// Sign ins and registrations allowed to wait for [`ARGON`] at once; past that the hub answers
+/// 503 right away instead of holding more requests (and their bodies) in memory.
+const MAX_ARGON_WAITING: usize = 256;
+static ARGON_WAITING: AtomicUsize = AtomicUsize::new(0);
+
 /// Runs Argon2 on the blocking pool, so it never stalls an async worker (and, under the DB lock,
 /// every request). The permit lives as long as the work, even if the request is dropped.
 async fn argon<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    struct Waiting;
+    impl Drop for Waiting {
+        fn drop(&mut self) {
+            ARGON_WAITING.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+    let waiting = Waiting;
+    if ARGON_WAITING.fetch_add(1, Ordering::Relaxed) >= MAX_ARGON_WAITING {
+        return Err(Error(StatusCode::SERVICE_UNAVAILABLE, "the hub is busy, try again shortly".into()));
+    }
     let permit = ARGON.clone().acquire_owned().await.map_err(anyhow::Error::from)?;
+    drop(waiting);
     tokio::task::spawn_blocking(move || {
         let out = f();
         drop(permit);
@@ -218,7 +249,14 @@ static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| hash_password("not a real
 
 /// Checks a username/password pair (also used by the /device web page).
 pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
+    let wrong = || Error(StatusCode::UNAUTHORIZED, "wrong username or password".into());
     let name = c.username.trim().to_string();
+    // No account can have an invalid name, so this reveals nothing and keeps junk out of `failures`.
+    if !valid_username(&name) {
+        return Err(wrong());
+    }
+    // Usernames match case-insensitively (`collate nocase`), so the limit must too.
+    let key = name.to_ascii_lowercase();
     let row: Option<(String, String, String)> = s
         .db()
         .query_row("select id, username, pw_hash from users where username = ?1", params![name], |r| {
@@ -226,7 +264,7 @@ pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
         })
         .optional()?;
     // Counted before checking, so parallel guesses can't all slip in under the limit.
-    let allowed = s.failures(&name, |(count, _)| {
+    let allowed = s.failures(&key, |(count, _)| {
         *count += 1;
         *count <= MAX_FAILURES
     });
@@ -236,9 +274,9 @@ pub async fn check_credentials(s: &AppState, c: Credentials) -> Result<User> {
     let hash = row.as_ref().map(|(_, _, h)| h.clone());
     let ok = argon(move || verify_password(&c.password, hash.as_deref().unwrap_or(&DUMMY_HASH))).await?;
     let Some((id, username, _)) = row.filter(|_| ok) else {
-        return Err(Error(StatusCode::UNAUTHORIZED, "wrong username or password".into()));
+        return Err(wrong());
     };
-    s.failures.lock().unwrap_or_else(|e| e.into_inner()).remove(&name);
+    s.failures.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
     Ok(User { id, username })
 }
 
