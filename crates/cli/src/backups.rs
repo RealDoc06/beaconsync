@@ -273,40 +273,50 @@ fn one_folder(name: &str) -> Option<&std::ffi::OsStr> {
     }
 }
 
-/// `level-name` as a relative path of plain folder names (`world`, `worlds/survival`), rebuilt
-/// from its parts so `world/` is `world`. `None` for `..`, `.`, a root or a drive, including a
-/// drive inside a later part (`worlds/D:x`, which Windows would join as a drive): the world must
-/// sit inside the server.
+/// `level-name` as a relative path of plain folder names (`world`, `./worlds/survival/`),
+/// rebuilt from its parts. `None` for `..`, a root or a drive (on Windows also a drive inside a
+/// later part, `worlds/D:x`, which would join as a drive): the world must sit inside the server.
 fn world_rel(name: &str) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for part in Path::new(name).components() {
         match part {
-            Component::Normal(p) if !p.to_string_lossy().contains(':') => out.push(p),
+            Component::CurDir => {}
+            Component::Normal(p) if !(cfg!(windows) && p.to_string_lossy().contains(':')) => out.push(p),
             _ => return None,
         }
     }
     (!out.as_os_str().is_empty()).then_some(out)
 }
 
-/// The world folder a restore clears. Refused unless it sits inside the server through real
-/// folders (no link along the way, which backups don't follow) and is a folder backups keep, so
-/// a restore only ever clears a world its backup holds.
+/// The world folder a restore clears, refused unless it sits inside the server.
 fn world_dir(server: &Path) -> Result<PathBuf> {
     let name = level_name(server);
     let rel =
         world_rel(&name).with_context(|| format!("level-name {name:?} in server.properties isn't a folder inside the server"))?;
-    let top = rel.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
-    if skip(server, &top, &rel) {
-        bail!("level-name {name:?} is inside a folder backups leave out");
+    Ok(server.join(rel))
+}
+
+/// Whether `world` has anything in it to lose: a link (whatever it points at) or a folder with
+/// entries. A missing world, or a file where it would be, has nothing.
+fn has_content(world: &Path) -> bool {
+    match fs::symlink_metadata(world) {
+        Ok(m) if m.file_type().is_symlink() => true,
+        Ok(m) if m.is_dir() => fs::read_dir(world).is_ok_and(|mut d| d.next().is_some()),
+        _ => false,
     }
+}
+
+/// Refuses a deploy up front when its safety backup couldn't hold the world: one behind a link,
+/// which backups don't follow. Checked before Minecraft is stopped.
+pub fn check_world(server: &Path) -> Result<()> {
     let mut dir = server.to_path_buf();
-    for part in rel.components() {
+    for part in world_dir(server)?.strip_prefix(server)?.components() {
         dir.push(part);
         if fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
-            bail!("{} is a link; backups don't follow it, so a restore won't clear the world behind it", dir.display());
+            bail!("{} is a link, which backups don't follow; move the world into the server folder", dir.display());
         }
     }
-    Ok(dir)
+    Ok(())
 }
 
 /// The archive path, without `./` parts, when it names `.beacon/server.json` (the server's config,
@@ -325,14 +335,29 @@ fn server_config_entry(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Removes a world folder before a restore. Missing is fine, and so is a file where the folder or
-/// one of its parents would be (a pack file the restore removes next); anything else stops it.
+/// Empties a world folder before a restore, keeping the folder itself (it may be a mount point).
+/// A link there is removed, not followed. Missing is fine, and so is a file where the folder or a
+/// parent would be (a pack file the restore removes next); anything else stops the restore.
 fn clear(dir: &Path) -> Result<()> {
     use std::io::ErrorKind::{NotADirectory, NotFound};
-    match fs::remove_dir_all(dir) {
-        Err(e) if !matches!(e.kind(), NotFound | NotADirectory) => Err(e).with_context(|| format!("clearing {}", dir.display())),
-        _ => Ok(()),
+    let ctx = || format!("clearing {}", dir.display());
+    let meta = match fs::symlink_metadata(dir) {
+        Err(e) if matches!(e.kind(), NotFound | NotADirectory) => return Ok(()),
+        meta => meta.with_context(ctx)?,
+    };
+    if meta.file_type().is_symlink() {
+        return fs::remove_file(dir).with_context(ctx);
     }
+    if !meta.is_dir() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(dir).with_context(ctx)? {
+        let entry = entry.with_context(ctx)?;
+        let path = entry.path();
+        let removed = if entry.file_type()?.is_dir() { fs::remove_dir_all(&path) } else { fs::remove_file(&path) };
+        removed.with_context(|| format!("clearing {}", path.display()))?;
+    }
+    Ok(())
 }
 
 /// A restore worked out by [`plan`], every check passed, before anything is deleted.
@@ -383,7 +408,12 @@ pub fn plan(server: &Path, id: &str) -> Result<Plan> {
         // Canonical like `Archive::unpack`, which also gives Windows its long path prefix.
         let dest = server.canonicalize()?;
         let world = world_dir(server)?;
-        let tokens = check_full_archive(archive.try_clone()?)?;
+        let (tokens, has_world) = check_full_archive(archive.try_clone()?, world.strip_prefix(server)?)?;
+        // A world the archive doesn't hold (behind a link, in a folder backups skip, spelled
+        // differently on a case-insensitive disk) would be cleared and never put back.
+        if !has_world && has_content(&world) {
+            bail!("this backup doesn't contain the world at {}; restoring it would leave the world empty", world.display());
+        }
         refuse_link(&dest, Path::new(".beacon/server.json"))?;
         for t in &tokens {
             refuse_link(&dest, t)?;
@@ -455,12 +485,12 @@ pub fn apply(server: &Path, plan: Plan) -> Result<()> {
 }
 
 /// Reads a whole server archive before a restore touches anything, returning the spellings of its
-/// token entries. Refuses a truncated or corrupted backup (every entry, then the rest of the gzip
+/// token entries and whether it holds anything under `world`. Refuses a truncated or corrupted backup (every entry, then the rest of the gzip
 /// stream so its checksum is checked: tar stops at its end marker) and a link entry where the
 /// token's folder would be.
-fn check_full_archive(file: fs::File) -> Result<Vec<PathBuf>> {
+fn check_full_archive(file: fs::File, world: &Path) -> Result<(Vec<PathBuf>, bool)> {
     let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
-    let mut tokens = vec![];
+    let (mut tokens, mut has_world) = (vec![], false);
     for entry in tar.entries()? {
         let entry = entry?;
         let path = entry.path()?;
@@ -474,9 +504,10 @@ fn check_full_archive(file: fs::File) -> Result<Vec<PathBuf>> {
             bail!("the backup links {}; not restoring the server token through it", path.display());
         }
         tokens.extend(server_config_entry(&path));
+        has_world |= path.starts_with(world);
     }
     std::io::copy(&mut tar.into_inner(), &mut std::io::sink()).context("the backup is damaged")?;
-    Ok(tokens)
+    Ok((tokens, has_world))
 }
 
 fn archive_entries(file: fs::File, zip: bool) -> Result<Vec<String>> {
@@ -568,10 +599,15 @@ mod tests {
         fs::write(d.join("worlds/survival/level.dat"), "newer").unwrap();
         restore(&d, &b.id).unwrap();
         assert_eq!(fs::read_to_string(d.join("worlds/survival/level.dat")).unwrap(), "mine");
-        // A world inside a folder backups leave out is never cleared.
+        // `./` is fine; a world the backup doesn't hold is never cleared.
+        fs::write(d.join("server.properties"), "level-name=./worlds/survival\n").unwrap();
+        assert!(plan(&d, &b.id).is_ok());
+        fs::create_dir_all(d.join(".beacon/backup-world")).unwrap();
+        fs::write(d.join(".beacon/backup-world/level.dat"), "skipped").unwrap();
         fs::write(d.join("server.properties"), "level-name=.beacon/backup-world\n").unwrap();
-        assert!(plan(&d, &b.id).is_err());
-        // Nor one behind a link, which backups don't follow.
+        let skipped = create(&d, "skipped").unwrap();
+        assert!(plan(&d, &skipped.id).is_err());
+        // Nor one behind a link, which backups don't follow, and deploys say so before stopping.
         #[cfg(unix)]
         {
             let outside = std::env::temp_dir().join(format!("beacon-linked-{}", rand_suffix()));
@@ -579,7 +615,9 @@ mod tests {
             fs::write(outside.join("survival/level.dat"), "elsewhere").unwrap();
             std::os::unix::fs::symlink(&outside, d.join("linked")).unwrap();
             fs::write(d.join("server.properties"), "level-name=linked/survival\n").unwrap();
-            assert!(plan(&d, &b.id).is_err());
+            assert!(check_world(&d).is_err());
+            let linked = create(&d, "linked").unwrap();
+            assert!(plan(&d, &linked.id).is_err());
             assert!(outside.join("survival/level.dat").exists());
             fs::remove_dir_all(outside).ok();
         }
@@ -685,7 +723,8 @@ mod tests {
         assert!(d.join("world/level.dat").exists() && d.join("mods/pack.jar").exists(), "a refused restore deletes nothing");
         assert_eq!(one_folder("world/"), Some(std::ffi::OsStr::new("world")));
         assert_eq!(world_rel("worlds/survival/"), Some(PathBuf::from("worlds/survival")));
-        assert_eq!(world_rel("../x").or(world_rel("/abs")).or(world_rel(".")).or(world_rel("worlds/D:x")), None);
+        assert_eq!(world_rel("../x").or(world_rel("/abs")).or(world_rel(".")), None);
+        assert_eq!(world_rel("worlds/D:x").is_none(), cfg!(windows));
         assert_eq!(server_config_entry(Path::new("./.Beacon/Server.json")), Some(PathBuf::from(".Beacon/Server.json")));
         assert_eq!(server_config_entry(Path::new("x/.beacon/server.json")), None);
         fs::write(d.join("server.properties"), "level-name=world\n").unwrap();

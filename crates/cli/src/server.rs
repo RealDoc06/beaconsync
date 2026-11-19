@@ -1441,6 +1441,8 @@ async fn apply_update(dir: &Path, cfg: &mut ServerConfig, store: &ObjectStore, h
     report(&agent, dep.clone(), "applying", format!("updating to {}", t.release_name), cfg.commit.clone()).await;
     let result: Result<()> = async {
         let tree = fetch_tree(hub, store, &t.commit).await?;
+        // Before announcing or stopping anything: a world the safety backup can't hold stops here.
+        backups::check_world(dir)?;
         if let Some(mut m) = mc {
             m.send(&format!("say [BeaconSync] Updating to {} in 30 seconds", t.release_name)).await;
             tokio::time::sleep(Duration::from_secs(20)).await;
@@ -1477,8 +1479,10 @@ async fn apply_with_backup(
     // the deploy stops here with nothing touched.
     let undo = tokio::task::spawn_blocking(move || {
         let b = backups::create(&d, &note)?;
-        // A refused way back leaves no stray full backup behind each retried deploy.
-        backups::plan(&d, &b.id).inspect_err(|_| backups::prune(&d))
+        // A refused way back removes only the backup just taken, keeping the older ones.
+        backups::plan(&d, &b.id).inspect_err(|_| {
+            backups::delete(&d, &b.id).ok();
+        })
     })
     .await??;
     let fetcher = Fetcher::new(Some(store.clone()), Some(hub.base.clone()));
