@@ -105,11 +105,12 @@ fn write_through_temp(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
         }
         #[cfg(not(unix))]
         let _ = private;
-        let written = options.open(&tmp).and_then(|mut f| {
-            f.write_all(bytes)?;
+        // Only cleaned up once this call created it: a failed exclusive open names someone else's file.
+        let mut f = options.open(&tmp)?;
+        let written = f.write_all(bytes).map(|()| {
             f.sync_all().ok();
-            Ok(())
         });
+        drop(f);
         // Unique names would otherwise pile up (secrets included) after failed writes.
         if let Err(e) = written.and_then(|()| fs::rename(&tmp, path)) {
             fs::remove_file(&tmp).ok();
