@@ -20,7 +20,8 @@ export function WindowControls() {
       win.onFocusChanged(({ payload }) => setFocused(payload)),
     ]
     syncMaximized()
-    void win.isFocused().then(setFocused)
+    // Read focus once the listener is live, so an early blur can't be overwritten.
+    void Promise.all(unlisten).then(() => win.isFocused().then(setFocused))
     return () => unlisten.forEach((p) => void p.then((off) => off()))
   }, [])
 
@@ -55,6 +56,8 @@ function Caption({
       aria-label={label}
       title={label}
       tabIndex={-1}
+      // Native caption buttons never take focus; keep it on whatever field had it.
+      onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       className={`grid w-[46px] place-items-center font-['Segoe_Fluent_Icons','Segoe_MDL2_Assets'] text-[10px] transition-colors duration-100 ${
         danger ? 'hover:bg-[#c42b1c] hover:text-white active:bg-[#c42b1c]/90' : 'hover:bg-fg/8 active:bg-fg/5'
