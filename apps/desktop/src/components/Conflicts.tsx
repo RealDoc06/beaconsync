@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { call } from '../lib/api'
 import { packKeys, useAction, useApp } from '../lib/store'
 import type { Conflict, ConflictSide, Pick } from '../lib/types'
+import { CheckIcon } from './Icons'
 import { Button, Dialog } from './ui'
 
 /** Picker for merge conflicts (branch merges and upstream updates): keep mine or take theirs. */
@@ -26,22 +27,31 @@ function ConflictDialog({ path, items, onClose }: { path: string; items: Conflic
     () => call('resolve_conflicts', { path, conflicts: items, picks: Object.entries(picks) as [string, Pick][] }),
     { label: 'Applying choices', invalidate: packKeys(path), done: 'Choices applied. Save a version to finish.', onSuccess: onClose },
   )
-  const option = (c: Conflict, pick: Pick, side: ConflictSide) => (
-    <button
-      type="button"
-      onClick={() => setPicks({ ...picks, [c.id]: pick })}
-      className={`flex min-w-0 flex-col rounded-md border px-2.5 py-1.5 text-left ${
-        picks[c.id] === pick ? 'border-accent' : 'border-line-strong text-muted hover:border-[#555]'
-      }`}
-    >
-      <span className="text-[11px] text-muted">{pick === 'ours' ? 'Keep mine' : 'Take theirs'}</span>
-      <span className="truncate">{describe(side)}</span>
-    </button>
-  )
+  const option = (c: Conflict, pick: Pick, side: ConflictSide) => {
+    const selected = picks[c.id] === pick
+    return (
+      <button
+        type="button"
+        onClick={() => setPicks({ ...picks, [c.id]: pick })}
+        className={`flex min-w-0 flex-col gap-0.5 rounded-xl border px-3 py-2 text-left transition-all ${
+          selected
+            ? 'border-accent bg-accent-soft text-fg shadow-theme-xs'
+            : 'border-line-strong bg-bg/60 text-muted hover:border-line-hover hover:text-fg-secondary'
+        }`}
+      >
+        <span className="flex items-center justify-between gap-1 text-[11px] font-medium">
+          <span className={selected ? 'text-accent-text' : 'text-muted'}>{pick === 'ours' ? 'Keep mine' : 'Take theirs'}</span>
+          {selected && <CheckIcon className="size-3 text-accent-text" />}
+        </span>
+        <span className="truncate text-xs font-medium">{describe(side)}</span>
+      </button>
+    )
+  }
   return (
     <Dialog
       wide
       title={`${items.length} file${items.length === 1 ? '' : 's'} changed on both sides`}
+      subtitle="Choose which version to keep for each conflicting file."
       onClose={onClose}
       footer={
         <>
@@ -52,10 +62,10 @@ function ConflictDialog({ path, items, onClose }: { path: string; items: Conflic
         </>
       }
     >
-      <div className="flex flex-col">
+      <div className="flex flex-col divide-y divide-line">
         {items.map((c) => (
-          <div key={c.id} className="grid grid-cols-[minmax(0,1fr)_200px_200px] items-center gap-3 border-b border-line py-2">
-            <span className="truncate text-xs" title={c.id}>
+          <div key={c.id} className="grid grid-cols-[minmax(0,1fr)_210px_210px] items-center gap-3 py-2.5 first:pt-0 last:pb-0">
+            <span className="truncate font-mono text-xs text-fg-secondary" title={c.id}>
               {(c.ours ?? c.theirs ?? c.base)?.[0] ?? c.id}
             </span>
             {option(c, 'ours', c.ours)}

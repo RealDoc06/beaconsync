@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useDeferredValue, useState } from 'react'
+import { DownloadIcon, FileArchiveIcon, FolderIcon, SearchIcon } from '../components/Icons'
 import { PageHeader } from '../components/PageHeader'
 import { Button, Empty, ErrorLine, Input, Tabs, Thumb } from '../components/ui'
 import { call } from '../lib/api'
@@ -26,18 +27,18 @@ export function ImportView() {
   const hasCf = (settings.data?.curseforge_key ?? '') !== ''
   return (
     <>
-      <PageHeader title="Import" />
-      <div className="pt-2">
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            { value: 'file', label: 'From a file or folder' },
-            { value: 'modrinth', label: 'Modrinth modpacks' },
-            ...(hasCf ? [{ value: 'curseforge' as const, label: 'CurseForge modpacks' }] : []),
-          ]}
-        />
-      </div>
+      <PageHeader title="Import" subtitle="Bring in an existing pack from disk, Modrinth, or CurseForge" />
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { value: 'file', label: 'From file or folder', icon: <FolderIcon className="size-3.5" /> },
+          { value: 'modrinth', label: 'Modrinth modpacks', icon: <DownloadIcon className="size-3.5" /> },
+          ...(hasCf
+            ? [{ value: 'curseforge' as const, label: 'CurseForge modpacks', icon: <DownloadIcon className="size-3.5" /> }]
+            : []),
+        ]}
+      />
       <div className="min-h-0 flex-1 overflow-auto">
         {tab === 'file' && <FromDisk />}
         {tab === 'modrinth' && <Modrinth />}
@@ -59,17 +60,32 @@ function FromDisk() {
     if (dir) folder.mutate(dir)
   }
   return (
-    <div className="grid max-w-3xl grid-cols-2 gap-px border-b border-line bg-line">
-      <div className="flex flex-col items-start gap-3 bg-bg p-5">
-        <h3 className="font-semibold">Modpack file</h3>
-        <p className="text-muted">.mrpack, CurseForge .zip or a Prism Launcher export.</p>
+    <div className="grid max-w-3xl grid-cols-2 gap-4 p-6">
+      <div className="flex flex-col items-start justify-between gap-5 rounded-2xl border border-line bg-surface p-5 shadow-theme-xs">
+        <div className="flex flex-col gap-2.5">
+          <div className="grid size-10 place-items-center rounded-xl border border-accent-border bg-accent-soft text-accent-text">
+            <FileArchiveIcon className="size-5" />
+          </div>
+          <h3 className="text-sm font-semibold text-fg">Modpack file</h3>
+          <p className="text-xs leading-relaxed text-muted">
+            Import a <span className="font-mono text-fg-secondary">.mrpack</span>, CurseForge{' '}
+            <span className="font-mono text-fg-secondary">.zip</span>, or a Prism Launcher export.
+          </p>
+        </div>
         <Button variant="primary" onClick={pickFile} disabled={file.isPending}>
           Choose file
         </Button>
       </div>
-      <div className="flex flex-col items-start gap-3 bg-bg p-5">
-        <h3 className="font-semibold">Existing instance</h3>
-        <p className="text-muted">A Prism or MultiMC instance folder. Its files stay as they are.</p>
+      <div className="flex flex-col items-start justify-between gap-5 rounded-2xl border border-line bg-surface p-5 shadow-theme-xs">
+        <div className="flex flex-col gap-2.5">
+          <div className="grid size-10 place-items-center rounded-xl border border-line-strong bg-surface-2 text-fg-secondary">
+            <FolderIcon className="size-5" />
+          </div>
+          <h3 className="text-sm font-semibold text-fg">Existing instance</h3>
+          <p className="text-xs leading-relaxed text-muted">
+            Track an existing Prism or MultiMC instance folder. Its files stay untouched right where they are.
+          </p>
+        </div>
         <Button onClick={pickFolder} disabled={folder.isPending}>
           Choose folder
         </Button>
@@ -88,25 +104,39 @@ function Modrinth() {
   })
   const install = useImport((project: string) => call('install_modrinth_pack', { project }), 'Installing modpack')
   return (
-    <div className="flex flex-col">
-      <div className="p-5 pb-3">
-        <Input placeholder="Search Modrinth modpacks" value={q} onChange={(e) => setQ(e.target.value)} className="w-full max-w-md" />
-      </div>
+    <div className="flex flex-col gap-4 p-6">
+      <Input
+        icon={<SearchIcon className="size-3.5" />}
+        placeholder="Search Modrinth modpacks"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        className="w-full max-w-md"
+      />
       <ErrorLine error={results.error} />
-      {results.data?.hits.map((h) => (
-        <ResultRow
-          key={h.project_id}
-          icon={h.icon_url}
-          title={h.title}
-          meta={`${h.author} · ${count(h.downloads)} downloads`}
-          description={h.description}
-          action={
-            <Button small onClick={() => install.mutate(h.project_id)} disabled={install.isPending}>
-              Install
-            </Button>
-          }
-        />
-      ))}
+      {results.data?.hits.length === 0 && (
+        <Empty icon={<SearchIcon className="size-5" />} title="No modpacks found">
+          Try a different keyword.
+        </Empty>
+      )}
+      {results.data && results.data.hits.length > 0 && (
+        <div className="overflow-hidden rounded-2xl border border-line bg-surface shadow-theme-xs divide-y divide-line">
+          {results.data.hits.map((h) => (
+            <ResultRow
+              key={h.project_id}
+              icon={h.icon_url}
+              title={h.title}
+              meta={`${h.author} · ${count(h.downloads)} downloads`}
+              description={h.description}
+              action={
+                <Button small variant="primary" onClick={() => install.mutate(h.project_id)} disabled={install.isPending}>
+                  <DownloadIcon className="size-3.5" />
+                  Install
+                </Button>
+              }
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -121,26 +151,39 @@ function CurseForge() {
   })
   const install = useImport((id: number) => call('install_curseforge_pack', { id }), 'Installing modpack')
   return (
-    <div className="flex flex-col">
-      <div className="p-5 pb-3">
-        <Input placeholder="Search CurseForge modpacks" value={q} onChange={(e) => setQ(e.target.value)} className="w-full max-w-md" />
-      </div>
+    <div className="flex flex-col gap-4 p-6">
+      <Input
+        icon={<SearchIcon className="size-3.5" />}
+        placeholder="Search CurseForge modpacks"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        className="w-full max-w-md"
+      />
       <ErrorLine error={results.error} />
-      {results.data?.length === 0 && <Empty>No modpacks found</Empty>}
-      {results.data?.map((m) => (
-        <ResultRow
-          key={m.id}
-          icon={m.logo?.thumbnailUrl}
-          title={m.name}
-          meta={`${m.authors[0]?.name ?? ''} · ${count(m.downloadCount)} downloads`}
-          description={m.summary}
-          action={
-            <Button small onClick={() => install.mutate(m.id)} disabled={install.isPending}>
-              Install
-            </Button>
-          }
-        />
-      ))}
+      {results.data?.length === 0 && (
+        <Empty icon={<SearchIcon className="size-5" />} title="No modpacks found">
+          Try a different keyword.
+        </Empty>
+      )}
+      {results.data && results.data.length > 0 && (
+        <div className="overflow-hidden rounded-2xl border border-line bg-surface shadow-theme-xs divide-y divide-line">
+          {results.data.map((m) => (
+            <ResultRow
+              key={m.id}
+              icon={m.logo?.thumbnailUrl}
+              title={m.name}
+              meta={`${m.authors[0]?.name ?? ''} · ${count(m.downloadCount)} downloads`}
+              description={m.summary}
+              action={
+                <Button small variant="primary" onClick={() => install.mutate(m.id)} disabled={install.isPending}>
+                  <DownloadIcon className="size-3.5" />
+                  Install
+                </Button>
+              }
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -159,14 +202,14 @@ export function ResultRow({
   action: React.ReactNode
 }) {
   return (
-    <div className="flex items-center gap-3 border-t border-line px-5 py-2.5">
-      <Thumb src={icon} size={36} />
+    <div className="flex items-center gap-3.5 px-4 py-3 transition-colors hover:bg-hover">
+      <Thumb src={icon} size={40} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="truncate font-medium">{title}</span>
+          <span className="truncate font-semibold text-fg">{title}</span>
           <span className="shrink-0 text-xs text-muted">{meta}</span>
         </div>
-        <div className="truncate text-xs text-muted">{description}</div>
+        <div className="mt-0.5 truncate text-xs text-muted">{description}</div>
       </div>
       {action}
     </div>

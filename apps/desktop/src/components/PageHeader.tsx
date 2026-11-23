@@ -1,11 +1,28 @@
 import type { ReactNode } from 'react'
 
-/** Title row at the top of a page with actions on the right. Its empty space drags the window,
- * since on macOS the title bar is drawn over the app. */
-export function PageHeader({ title, children }: { title: ReactNode; children?: ReactNode }) {
+/** Top header inside the inset workspace canvas. */
+export function PageHeader({
+  leading,
+  title,
+  subtitle,
+  children,
+}: {
+  leading?: ReactNode
+  title: ReactNode
+  subtitle?: ReactNode
+  children?: ReactNode
+}) {
   return (
-    <header data-tauri-drag-region className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-5">
-      <h1 className="mr-auto min-w-0 truncate text-[15px] font-semibold">{title}</h1>
+    <header className="@container flex min-h-[62px] shrink-0 items-center gap-2.5 border-b border-line px-6 py-3">
+      <div className="mr-auto flex min-w-0 flex-1 items-center gap-3.5">
+        {leading}
+        <div className="flex min-w-0 flex-col">
+          <h1 className="flex min-w-0 items-center gap-2 text-[17px] font-semibold tracking-tight text-fg">
+            {title}
+          </h1>
+          {subtitle && <div className="mt-0.5 truncate text-xs text-muted">{subtitle}</div>}
+        </div>
+      </div>
       {children}
     </header>
   )

@@ -1,11 +1,22 @@
 import { useQuery } from '@tanstack/react-query'
 import { save } from '@tauri-apps/plugin-dialog'
-import { useState } from 'react'
-import { Button, Dialog, Empty, ErrorLine, Field, Input, Select, Toggle } from '../../components/ui'
+import { useEffect, useRef, useState } from 'react'
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  DownloadIcon,
+  RefreshIcon,
+  RocketIcon,
+  ServerIcon,
+  TerminalIcon,
+  UploadIcon,
+} from '../../components/Icons'
+import { Button, Dialog, Empty, ErrorLine, Field, Input, Select, Tag, Textarea, Toggle, type TagTone } from '../../components/ui'
 import { useUpdate } from '../../components/UpdateButton'
 import { call } from '../../lib/api'
 import { ago, nextVersion, shortId } from '../../lib/format'
-import { askConfirm, keys, packKeys, useAction } from '../../lib/store'
+import { askConfirm, keys, packKeys, useAction, useApp } from '../../lib/store'
 import type { PackInfo, Release, Server } from '../../lib/types'
 import { ServerPanel } from './ServerPanel'
 
@@ -20,6 +31,10 @@ export function ServersTab({ p }: { p: PackInfo }) {
   const [publishing, setPublishing] = useState(false)
   const [deploying, setDeploying] = useState(false)
   const [open, setOpen] = useState<string | null>(null)
+  const [copiedCmd, setCopiedCmd] = useState(false)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const setNotice = useApp((s) => s.set)
+  useEffect(() => () => clearTimeout(copyTimer.current), [])
   const share = useShare(path)
 
   const servers = useQuery({
@@ -48,6 +63,14 @@ export function ServersTab({ p }: { p: PackInfo }) {
       done: () => `Updating beacon on ${outdated.length} server${outdated.length === 1 ? '' : 's'}`,
     },
   )
+
+  const installSnippet = [
+    'curl -fsSL https://github.com/RealDoc06/beaconsync/releases/latest/download/install.sh | bash',
+    'export PATH="$HOME/.local/bin:$PATH"',
+    `beacon login --hub ${p.config.remote?.hub ?? '<hub url>'}`,
+    `beacon server install --pack ${p.config.remote?.code ?? '<share code>'}`,
+  ].join('\n')
+
   const opened = servers.data?.find((s) => s.id === open)
   if (opened)
     return (
@@ -62,16 +85,19 @@ export function ServersTab({ p }: { p: PackInfo }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-      <div className="flex items-center gap-2 px-5 py-3">
-        <Button variant="primary" disabled={releases.isLoading} onClick={() => setPublishing(true)}>
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-6 py-3">
+        <Button variant="primary" small disabled={releases.isLoading} onClick={() => setPublishing(true)}>
+          <UploadIcon className="size-3.5" />
           Publish update
         </Button>
-        <Button onClick={() => setDeploying(true)} disabled={!published || !releases.data?.length || !servers.data?.length}>
+        <Button small onClick={() => setDeploying(true)} disabled={!published || !releases.data?.length || !servers.data?.length}>
+          <RocketIcon className="size-3.5" />
           Deploy to servers
         </Button>
         <span className="flex-1" />
         {latest && outdated.length > 0 && (
           <Button
+            small
             disabled={updateAll.isPending}
             onClick={() =>
               askConfirm({
@@ -82,54 +108,95 @@ export function ServersTab({ p }: { p: PackInfo }) {
               })
             }
           >
-            Update beacon on {outdated.length} server{outdated.length === 1 ? '' : 's'}
+            <RefreshIcon className="size-3.5" />
+            Update beacon ({outdated.length})
           </Button>
         )}
-        <Button onClick={pickExport} disabled={exportPack.isPending}>
-          Export server pack
+        <Button small onClick={pickExport} disabled={exportPack.isPending}>
+          <DownloadIcon className="size-3.5" />
+          Export server zip
         </Button>
       </div>
 
-      <div className="border-t border-line">
+      <div className="@container flex flex-1 flex-col gap-5 p-6">
         {!published && (
-          <Empty
-            action={
-              <Button variant="primary" disabled={share.isPending} onClick={() => share.mutate(undefined)}>
-                Share on hub
-              </Button>
-            }
-          >
-            Not on the hub yet. Share it to install servers from it.
-          </Empty>
+          <div className="rounded-2xl border border-line bg-surface shadow-theme-xs">
+            <Empty
+              icon={<ServerIcon className="size-5" />}
+              title="Not on the hub yet"
+              action={
+                <Button variant="primary" disabled={share.isPending} onClick={() => share.mutate(undefined)}>
+                  Share on hub
+                </Button>
+              }
+            >
+              Share this pack on your hub to publish releases and install auto-updating servers.
+            </Empty>
+          </div>
         )}
-        <ErrorLine error={servers.error} />
-        {published && servers.data?.length === 0 && (
-          <Empty>
-            {releases.data?.length ? 'No servers yet. Install one with the steps below.' : 'Publish a version, then install a server with the steps below.'}
-          </Empty>
-        )}
-        {servers.data?.map((s) => (
-          <ServerRow
-            key={s.id}
-            s={s}
-            version={releaseName(s.current_commit)}
-            target={releaseName(s.target_commit)}
-            latest={behind(s, latest) ? latest : null}
-            onOpen={() => setOpen(s.id)}
-          />
-        ))}
-      </div>
 
-      <section className="mt-auto flex flex-col gap-2 border-t border-line px-5 py-4">
-        <h3 className="font-semibold">Install on a server</h3>
-        <p className="text-muted">On the server machine (Linux or macOS), run:</p>
-        <pre className="overflow-x-auto rounded-md border border-line bg-raise px-3 py-2 font-mono text-xs leading-6 select-text">
-          curl -fsSL https://github.com/RealDoc06/beaconsync/releases/latest/download/install.sh | bash{'\n'}export PATH="$HOME/.local/bin:$PATH"{'\n'}beacon login --hub {p.config.remote?.hub ?? '<hub url>'}{'\n'}beacon server install --pack {p.config.remote?.code ?? '<share code>'}
-        </pre>
-        <p className="text-xs text-muted">
-          beacon login shows a code. Approve it in Settings. The server then appears here and follows your deploys.
-        </p>
-      </section>
+        <ErrorLine error={servers.error} />
+
+        {published && servers.data?.length === 0 && (
+          <div className="rounded-2xl border border-line bg-surface shadow-theme-xs">
+            <Empty icon={<ServerIcon className="size-5" />} title="No servers attached">
+              {releases.data?.length
+                ? 'Install a server using the commands below to see live status, console, and backups here.'
+                : 'Publish your first release, then install a server with the commands below.'}
+            </Empty>
+          </div>
+        )}
+
+        {servers.data && servers.data.length > 0 && (
+          <div className="grid grid-cols-1 gap-3.5 @[740px]:grid-cols-2">
+            {servers.data.map((s) => (
+              <ServerRow
+                key={s.id}
+                s={s}
+                version={releaseName(s.current_commit)}
+                target={releaseName(s.target_commit)}
+                latest={behind(s, latest) ? latest : null}
+                onOpen={() => setOpen(s.id)}
+              />
+            ))}
+          </div>
+        )}
+
+        <section className="mt-auto overflow-hidden rounded-2xl border border-line bg-surface shadow-theme-xs">
+          <div className="flex items-center justify-between border-b border-line bg-sidebar/50 px-4 py-2.5">
+            <div className="flex items-center gap-2 text-xs font-semibold text-fg">
+              <TerminalIcon className="size-3.5 text-accent-text" />
+              Install on a server (Linux or macOS)
+            </div>
+            <Button
+              small
+              variant="ghost"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(installSnippet)
+                  setCopiedCmd(true)
+                  clearTimeout(copyTimer.current)
+                  copyTimer.current = setTimeout(() => setCopiedCmd(false), 1500)
+                } catch {
+                  setNotice({ notice: { kind: 'error', text: 'Could not copy to clipboard' } })
+                }
+              }}
+            >
+              {copiedCmd ? <CheckIcon className="size-3 text-ok" /> : <CopyIcon className="size-3" />}
+              {copiedCmd ? 'Copied' : 'Copy'}
+            </Button>
+          </div>
+          <div className="flex flex-col gap-2.5 p-4">
+            <pre className="overflow-x-auto rounded-xl border border-line bg-console px-3.5 py-2.5 font-mono text-xs leading-6 text-fg-secondary select-text">
+              {installSnippet}
+            </pre>
+            <p className="text-xs text-muted">
+              <span className="font-mono text-fg-secondary">beacon login</span> shows a code to approve in Settings. The
+              server then appears above and follows your deploys automatically.
+            </p>
+          </div>
+        </section>
+      </div>
 
       {publishing && <PublishDialog path={path} released={releases.data?.map((r) => r.name) ?? []} onClose={() => setPublishing(false)} />}
       {deploying && releases.data && servers.data && (
@@ -159,39 +226,56 @@ function ServerRow({
   onOpen: () => void
 }) {
   const pending = s.target_commit && s.target_commit !== s.current_commit
-  const tone = s.status === 'failed' ? 'text-bad' : s.status === 'applying' || s.status === 'stopped' || pending ? 'text-warn' : 'text-muted'
+  const tone: TagTone = !s.online
+    ? 'muted'
+    : s.status === 'failed'
+      ? 'bad'
+      : s.status === 'applying' || s.status === 'stopped' || pending
+        ? 'warn'
+        : 'ok'
+
   return (
     <button
       type="button"
       onClick={onOpen}
-      title="Console and backups"
-      className="grid h-12 w-full grid-cols-[minmax(0,1fr)_minmax(0,290px)_130px_minmax(0,1fr)_auto] items-center gap-3 border-b border-line px-5 text-left hover:bg-hover"
+      title="Open console and backups"
+      className="group flex w-full flex-col gap-3 rounded-2xl border border-line bg-surface p-4 text-left shadow-theme-xs transition-all duration-150 hover:-translate-y-0.5 hover:border-accent-border hover:shadow-theme-sm"
     >
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className={s.online ? 'text-ok' : 'text-[#444]'}>●</span>
-          <span className="truncate font-medium">{s.name}</span>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`size-2 shrink-0 rounded-full ${s.online ? 'bg-ok' : 'bg-subtle'}`} />
+            <span className="truncate text-[14px] font-semibold text-fg group-hover:text-accent-text">{s.name}</span>
+          </div>
+          <div className="mt-0.5 truncate pl-4 font-mono text-[11px] text-muted">{s.address}</div>
         </div>
-        <div className="truncate pl-4 font-mono text-[11px] text-muted">{s.address}</div>
+        <Tag tone={tone} dot>
+          {s.online ? s.status : 'offline'}
+          {s.last_seen && !s.online && ` · ${ago(s.last_seen)}`}
+        </Tag>
       </div>
-      <div className="min-w-0">
-        <div className="truncate">
+
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-line bg-bg/70 px-3 py-2 text-xs">
+        <span className="min-w-0 max-w-full truncate font-medium text-fg" title={pending ? `${version} → ${target}` : version}>
           {version}
           {pending && <span className="text-warn"> → {target}</span>}
-        </div>
-        <div className="truncate font-mono text-[11px] text-muted">
+        </span>
+        <span className="text-subtle">·</span>
+        <span className="min-w-0 max-w-full truncate font-mono text-[11px] text-muted">
           beacon {s.agent_version ?? 'unknown'}
           {latest && <span className="text-warn"> → {latest}</span>}
-        </div>
+        </span>
       </div>
-      <span className={`text-xs ${tone}`}>
-        {s.online ? s.status : 'offline'}
-        {s.last_seen && !s.online && ` · ${ago(s.last_seen)}`}
-      </span>
-      <span className="truncate text-xs text-muted" title={s.message}>
-        {s.message}
-      </span>
-      <span className="text-xs text-muted">Console and backups ›</span>
+
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="min-w-0 flex-1 truncate text-muted" title={s.message}>
+          {s.message || 'Ready for deploys'}
+        </span>
+        <span className="inline-flex shrink-0 items-center gap-1 font-medium text-accent-text">
+          Console &amp; backups
+          <ChevronRightIcon className="size-3.5" />
+        </span>
+      </div>
     </button>
   )
 }
@@ -209,6 +293,7 @@ function PublishDialog({ path, released, onClose }: { path: string; released: st
   return (
     <Dialog
       title="Publish update"
+      subtitle="Publishes your latest saved snapshot to the hub."
       onClose={onClose}
       footer={
         <>
@@ -221,18 +306,21 @@ function PublishDialog({ path, released, onClose }: { path: string; released: st
     >
       <div className="flex flex-col gap-4">
         <Field label="Version name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="v1.0" />
+          {(id) => <Input id={id} value={name} onChange={(e) => setName(e.target.value)} placeholder="v1.0" className="font-mono" />}
         </Field>
-        <Field label="Notes">
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={4}
-            placeholder="What players get in this update"
-            className="resize-none rounded-md border border-line-strong bg-bg p-2.5 outline-none placeholder:text-[#555] focus:border-[#666]"
-          />
+        <Field label="Release notes">
+          {(id) => (
+            <Textarea
+              id={id}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={4}
+              placeholder="What players get in this update"
+              className="resize-none"
+            />
+          )}
         </Field>
-        <p className="text-xs text-muted">Publishes the last saved version. Players get it next time they open the pack.</p>
+        <p className="text-xs text-muted">Players see this release next time they open the pack or in game.</p>
       </div>
     </Dialog>
   )
@@ -258,6 +346,7 @@ function DeployDialog({ path, releases, servers, onClose }: { path: string; rele
   return (
     <Dialog
       title="Deploy to servers"
+      subtitle="Each server warns players, backs up, and restarts cleanly."
       onClose={onClose}
       footer={
         <>
@@ -269,22 +358,31 @@ function DeployDialog({ path, releases, servers, onClose }: { path: string; rele
       }
     >
       <div className="flex flex-col gap-4">
-        <Field label="Version">
-          <Select value={release} onChange={setRelease} options={newest.map((r) => ({ value: r.id, label: `${r.name} · ${ago(r.created)}` }))} />
+        <Field label="Release version">
+          {(id) => (
+            <Select
+              id={id}
+              value={release}
+              onChange={setRelease}
+              options={newest.map((r) => ({ value: r.id, label: `${r.name} · ${ago(r.created)}` }))}
+            />
+          )}
         </Field>
         <Toggle checked={all} onChange={setAll} label={`All servers (${servers.length})`} />
         {!all && (
-          <div className="flex flex-col border-t border-line">
+          <div className="overflow-hidden rounded-xl border border-line bg-bg/60 divide-y divide-line">
             {servers.map((s) => (
-              <label key={s.id} className="flex h-9 items-center gap-2 border-b border-line">
-                <input type="checkbox" checked={chosen.has(s.id)} onChange={() => flip(s.id)} className="accent-[#7ee8ff]" />
-                <span>{s.name}</span>
-                <span className="ml-auto text-xs text-muted">{s.online ? 'online' : 'offline'}</span>
+              <label key={s.id} className="flex h-10 items-center gap-2.5 px-3 transition-colors hover:bg-hover">
+                <input type="checkbox" checked={chosen.has(s.id)} onChange={() => flip(s.id)} className="accent-accent" />
+                <span className="font-medium text-fg">{s.name}</span>
+                <Tag tone={s.online ? 'ok' : 'muted'} dot className="ml-auto">
+                  {s.online ? 'online' : 'offline'}
+                </Tag>
               </label>
             ))}
           </div>
         )}
-        <p className="text-xs text-muted">Each server warns players, backs up, and restarts on the new version. A failed update rolls back.</p>
+        <p className="text-xs text-muted">If an update fails to start, the server rolls back to its backup automatically.</p>
       </div>
     </Dialog>
   )

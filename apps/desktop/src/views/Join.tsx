@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
+import { GitBranchIcon, LinkCodeIcon, PlayIcon, SearchIcon, ServerIcon } from '../components/Icons'
 import { PageHeader } from '../components/PageHeader'
-import { Button, Input } from '../components/ui'
+import { Button, Input, Tag } from '../components/ui'
 import { call } from '../lib/api'
 import { loaderText, shortId } from '../lib/format'
 import { keys, useAction, useApp } from '../lib/store'
@@ -30,74 +31,114 @@ export function JoinView({ initial }: { initial?: string }) {
 
   return (
     <>
-      <PageHeader title="Join with code" />
-      <div className="flex max-w-xl flex-col gap-5 p-5">
-        <form
-          className="flex gap-2"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (input.trim()) lookup.mutate(input.trim())
-          }}
-        >
-          <Input
-            autoFocus
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value)
-              setPreview(null)
-            }}
-            placeholder="Code or link, e.g. 7F3K2Q"
-            className="flex-1 font-mono"
-          />
-          <Button type="submit" disabled={!input.trim() || lookup.isPending}>
-            Look up
-          </Button>
-        </form>
-
-        {p && (
-          <div className="flex flex-col gap-4 border-t border-line pt-5">
-            <div>
-              <div className="text-lg font-semibold">{p.name}</div>
-              <div className="text-muted">
-                by {p.owner} · Minecraft {p.minecraft} · {loaderText(p.loader)}
-              </div>
-              {p.description && <p className="mt-2">{p.description}</p>}
+      <PageHeader title="Join with code" subtitle="Enter a friend's share code or link to play or fork their pack" />
+      <div className="min-h-0 flex-1 overflow-auto">
+        <div className="mx-auto flex max-w-2xl flex-col gap-5 p-6">
+          <div className="rounded-2xl border border-line bg-surface p-5 shadow-theme-xs">
+            <div className="mb-3 flex items-center gap-2 text-xs font-medium text-fg-secondary">
+              <LinkCodeIcon className="size-4 text-accent-text" />
+              Share code or link
             </div>
-            <dl className="grid grid-cols-[120px_1fr] gap-y-1.5">
-              <dt className="text-muted">Latest version</dt>
-              <dd>{p.latest ? p.latest.name : 'Nothing published yet'}</dd>
-              <dt className="text-muted">Servers</dt>
-              <dd className="flex flex-col">
-                {p.servers.length === 0 && <span className="text-muted">None</span>}
-                {p.servers.map((s) => (
-                  <span key={s.name}>
-                    <span className={s.online ? 'text-ok' : 'text-muted'}>●</span> {s.name}{' '}
-                    <span className="font-mono text-xs text-muted">{s.address}</span>
-                    {s.commit && <span className="text-xs text-muted"> · {shortId(s.commit)}</span>}
-                  </span>
-                ))}
-              </dd>
-            </dl>
-            <div className="flex gap-2">
-              {mine && (
-                <Button variant="primary" disabled={!p.latest || join.isPending} onClick={() => join.mutate('edit')}>
-                  Edit this pack
-                </Button>
-              )}
-              <Button variant={mine ? 'default' : 'primary'} disabled={!p.latest || join.isPending} onClick={() => join.mutate('play')}>
-                Play this pack
+            <form
+              className="flex gap-2.5"
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (input.trim()) lookup.mutate(input.trim())
+              }}
+            >
+              <Input
+                autoFocus
+                inputSize="lg"
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  setPreview(null)
+                }}
+                placeholder="e.g. 7F3K2Q or https://..."
+                className="flex-1 font-mono tracking-wider"
+              />
+              <Button type="submit" variant="primary" size="lg" disabled={!input.trim() || lookup.isPending}>
+                <SearchIcon className="size-3.5" />
+                Look up
               </Button>
-              <Button disabled={!p.latest || join.isPending} onClick={() => join.mutate('fork')}>
-                Make my own copy
-              </Button>
-            </div>
-            <p className="text-xs text-muted">
-              {mine
-                ? 'Editing continues your pack on this computer from its newest saved version. Playing only follows its updates.'
-                : "Playing keeps you on the owner's updates. Your own copy can be changed freely and can still get updates later."}
-            </p>
+            </form>
           </div>
-        )}
+
+          {p && (
+            <div className="animate-dialog overflow-hidden rounded-2xl border border-line-strong bg-surface shadow-theme-sm">
+              <div className="flex flex-col gap-2 border-b border-line bg-sidebar/40 p-5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-semibold tracking-tight text-fg">{p.name}</h2>
+                  <Tag tone="accent" dot>
+                    Minecraft {p.minecraft}
+                  </Tag>
+                  <Tag>{loaderText(p.loader)}</Tag>
+                </div>
+                <div className="text-xs text-muted">
+                  Published by <span className="font-medium text-fg-secondary">{p.owner}</span>
+                </div>
+                {p.description && <p className="mt-1 text-[13px] leading-relaxed text-fg-secondary">{p.description}</p>}
+              </div>
+
+              <div className="flex flex-col gap-5 p-5">
+                <dl className="grid grid-cols-[120px_1fr] items-baseline gap-y-3 text-[13px]">
+                  <dt className="text-xs font-medium text-muted">Latest version</dt>
+                  <dd>
+                    {p.latest ? (
+                      <Tag tone="ok" dot>
+                        {p.latest.name}
+                      </Tag>
+                    ) : (
+                      <span className="text-muted">Nothing published yet</span>
+                    )}
+                  </dd>
+                  <dt className="text-xs font-medium text-muted">Servers</dt>
+                  <dd className="flex flex-col gap-1.5">
+                    {p.servers.length === 0 && <span className="text-muted">None attached</span>}
+                    {p.servers.map((srv) => (
+                      <div
+                        key={srv.name}
+                        className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-bg/60 px-3 py-1.5 text-xs"
+                      >
+                        <ServerIcon className="size-3.5 text-muted" />
+                        <span className={`size-2 rounded-full ${srv.online ? 'bg-ok' : 'bg-subtle'}`} />
+                        <span className="font-medium text-fg">{srv.name}</span>
+                        <span className="font-mono text-[11px] text-muted">{srv.address}</span>
+                        {srv.commit && <span className="ml-auto font-mono text-[11px] text-subtle">{shortId(srv.commit)}</span>}
+                      </div>
+                    ))}
+                  </dd>
+                </dl>
+
+                <div className="flex flex-wrap items-center gap-2 border-t border-line pt-4">
+                  {mine && (
+                    <Button variant="primary" disabled={!p.latest || join.isPending} onClick={() => join.mutate('edit')}>
+                      Edit this pack
+                    </Button>
+                  )}
+                  <Button
+                    variant={mine ? 'default' : 'primary'}
+                    disabled={!p.latest || join.isPending}
+                    onClick={() => join.mutate('play')}
+                  >
+                    <PlayIcon className="size-3.5" />
+                    Play this pack
+                  </Button>
+                  <Button disabled={!p.latest || join.isPending} onClick={() => join.mutate('fork')}>
+                    <GitBranchIcon className="size-3.5" />
+                    Make my own copy
+                  </Button>
+                </div>
+
+                <p className="text-xs leading-relaxed text-muted">
+                  {mine
+                    ? 'Editing continues your pack on this computer from its newest saved version. Playing only follows its updates.'
+                    : "Playing keeps you on the owner's updates. Your own copy can be changed freely and can still get updates later."}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </>
   )

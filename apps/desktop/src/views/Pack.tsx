@@ -1,14 +1,27 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
+import {
+  CubeIcon,
+  DiffIcon,
+  FolderIcon,
+  GitBranchIcon,
+  HistoryIcon,
+  PencilIcon,
+  PlayIcon,
+  ServerIcon,
+  ShareIcon,
+  SparklesIcon,
+  TrashIcon,
+} from '../components/Icons'
+import { InstanceIcon } from '../components/InstanceIcon'
 import { PageHeader } from '../components/PageHeader'
-import { Button, Dialog, ErrorLine, Input, Select, Tabs } from '../components/ui'
+import { Button, Dialog, ErrorLine, Input, Select, Tabs, Tag } from '../components/ui'
 import { call } from '../lib/api'
 import { loaderText } from '../lib/format'
 import { askConfirm, keys, packKeys, useAction, useApp, type PackTab } from '../lib/store'
 import type { PackInfo } from '../lib/types'
 import { ChangesTab } from './pack/Changes'
 import { HistoryTab } from './pack/History'
-import { InstanceIcon } from '../components/InstanceIcon'
 import { ModsTab } from './pack/Mods'
 import { ServersTab } from './pack/Servers'
 import { ShareTab } from './pack/Share'
@@ -28,20 +41,43 @@ export function PackView({ path, tab }: { path: string; tab: PackTab }) {
   const status = useStatus(path)
   const settings = useQuery({ queryKey: keys.settings, queryFn: () => call('get_settings') })
   const p = info.data
-  if (!p) return <ErrorLine error={info.error} />
+  if (!p) {
+    return info.error ? (
+      <div className="p-6">
+        <ErrorLine error={info.error} />
+      </div>
+    ) : null
+  }
 
   const subscriber = p.config.role === 'subscriber'
-  const changes = status.data ? status.data.diff.files.length + (status.data.diff.minecraft ? 1 : 0) + (status.data.diff.loader ? 1 : 0) : 0
-  const tabs: { value: PackTab; label: React.ReactNode }[] = [
-    { value: 'mods', label: 'Mods' },
+  const changes = status.data
+    ? status.data.diff.files.length + (status.data.diff.minecraft ? 1 : 0) + (status.data.diff.loader ? 1 : 0)
+    : 0
+  const tabs: { value: PackTab; label: ReactNode; icon: ReactNode }[] = [
+    { value: 'mods', label: 'Mods', icon: <CubeIcon className="size-3.5" /> },
     ...(subscriber
       ? []
       : [
-          { value: 'changes' as const, label: <>Changes{changes > 0 && <span className="text-warn tabular-nums">{changes}</span>}</> },
-          { value: 'history' as const, label: 'History' },
-          ...(settings.data?.signed_in ? [{ value: 'servers' as const, label: 'Servers' }] : []),
+          {
+            value: 'changes' as const,
+            icon: <DiffIcon className="size-3.5" />,
+            label: (
+              <span className="flex items-center gap-1.5">
+                Changes
+                {changes > 0 && (
+                  <span className="rounded-full bg-warn-soft px-1.5 py-px font-mono text-[10.5px] font-semibold text-warn ring-1 ring-warn-border tabular-nums">
+                    {changes}
+                  </span>
+                )}
+              </span>
+            ),
+          },
+          { value: 'history' as const, label: 'History', icon: <HistoryIcon className="size-3.5" /> },
+          ...(settings.data?.signed_in
+            ? [{ value: 'servers' as const, label: 'Servers', icon: <ServerIcon className="size-3.5" /> }]
+            : []),
         ]),
-    { value: 'share', label: 'Share' },
+    { value: 'share', label: 'Share', icon: <ShareIcon className="size-3.5" /> },
   ]
   const active = tabs.some((t) => t.value === tab) ? tab : 'mods'
 
@@ -49,9 +85,7 @@ export function PackView({ path, tab }: { path: string; tab: PackTab }) {
     <>
       <Header p={p} />
       {subscriber && <SubscribedBanner path={path} />}
-      <div className="pt-1">
-        <Tabs value={active} onChange={(t) => go({ name: 'pack', path, tab: t })} tabs={tabs} />
-      </div>
+      <Tabs value={active} onChange={(t) => go({ name: 'pack', path, tab: t })} tabs={tabs} />
       <div className="flex min-h-0 flex-1 flex-col">
         {active === 'mods' && <ModsTab p={p} />}
         {active === 'changes' && <ChangesTab path={path} />}
@@ -76,37 +110,61 @@ function Header({ p }: { p: PackInfo }) {
   })
   return (
     <PageHeader
+      leading={<InstanceIcon path={p.path} size={42} />}
       title={
-        <span className="flex items-center gap-3">
-          <InstanceIcon path={p.path} size={28} />
-          <span>{p.name}</span>
-          <span className="text-xs font-normal text-muted">
-            Minecraft {p.minecraft} · {loaderText(p.loader)}
-            {p.branch && p.branch !== 'main' && ` · ${p.branch}`}
-          </span>
+        <>
+          <span className="truncate">{p.name}</span>
+          {p.config.role === 'subscriber' && (
+            <Tag tone="info" dot>
+              Joined
+            </Tag>
+          )}
+          {p.branch && p.branch !== 'main' && (
+            <Tag tone="accent" shrink className="max-w-32">
+              <GitBranchIcon className="size-3 shrink-0" />
+              <span className="truncate" title={p.branch}>
+                {p.branch}
+              </span>
+            </Tag>
+          )}
+        </>
+      }
+      subtitle={
+        <span>
+          Minecraft <span className="font-mono font-medium text-fg-secondary">{p.minecraft}</span> · {loaderText(p.loader)}
         </span>
       }
     >
-      <Button variant="ghost" onClick={() => setRenaming(true)}>
-        Rename
-      </Button>
-      <Button
-        variant="ghost"
-        onClick={() =>
-          askConfirm({
-            title: `Delete ${p.name}?`,
-            body: 'This removes the instance folder, its worlds and its saved versions from this computer. Published copies on the hub stay.',
-            action: 'Delete',
-            danger: true,
-            onConfirm: () => remove.mutate(undefined),
-          })
-        }
-      >
-        Delete
-      </Button>
-      <Button onClick={() => reveal.mutate(undefined)}>Open folder</Button>
+      <div className="flex items-center gap-1 rounded-xl border border-line bg-surface/80 p-1">
+        <Button size="icon" variant="ghost" onClick={() => reveal.mutate(undefined)} title="Open pack folder" aria-label="Open pack folder">
+          <FolderIcon className="size-3.5" />
+        </Button>
+        <Button size="icon" variant="ghost" onClick={() => setRenaming(true)} title="Rename pack" aria-label="Rename pack">
+          <PencilIcon className="size-3.5" />
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost-danger"
+          title="Delete pack"
+          aria-label="Delete pack"
+          onClick={() =>
+            askConfirm({
+              title: `Delete ${p.name}?`,
+              body: 'This removes the instance folder, its worlds and its saved versions from this computer. Published copies on the hub stay.',
+              action: 'Delete',
+              danger: true,
+              onConfirm: () => remove.mutate(undefined),
+            })
+          }
+        >
+          <TrashIcon className="size-3.5" />
+        </Button>
+      </div>
+
       <Memory path={p.path} />
+
       <Button variant="primary" onClick={() => play.mutate(undefined)} disabled={play.isPending}>
+        <PlayIcon className="size-3.5" />
         Play
       </Button>
       {renaming && <RenameDialog p={p} onClose={() => setRenaming(false)} />}
@@ -126,13 +184,17 @@ function Memory({ path }: { path: string }) {
   if (memory.isPending) return null
   return (
     <Select
+      aria-label="Minecraft memory"
+      size="sm"
       value={memory.data ? String(memory.data) : ''}
       onChange={(v) => save.mutate(v ? Number(v) : null)}
       options={[
-        { value: '', label: 'Memory: default' },
-        ...MEMORY_GB.map((gb) => ({ value: String(gb * 1024), label: `Memory: ${gb} GB` })),
+        { value: '', label: 'RAM: default' },
+        ...MEMORY_GB.map((gb) => ({ value: String(gb * 1024), label: `RAM: ${gb} GB` })),
         // Keep a value set elsewhere (in Prism) selectable.
-        ...(memory.data && !MEMORY_GB.includes(memory.data / 1024) ? [{ value: String(memory.data), label: `Memory: ${memory.data} MB` }] : []),
+        ...(memory.data && !MEMORY_GB.includes(memory.data / 1024)
+          ? [{ value: String(memory.data), label: `RAM: ${memory.data} MB` }]
+          : []),
       ]}
     />
   )
@@ -158,7 +220,12 @@ function RenameDialog({ p, onClose }: { p: PackInfo; onClose: () => void }) {
         </>
       }
     >
-      <Input className="w-full" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && rename.mutate(undefined)} />
+      <Input
+        className="w-full"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && name.trim() && rename.mutate(undefined)}
+      />
     </Dialog>
   )
 }
@@ -178,16 +245,27 @@ function SubscribedBanner({ path }: { path: string }) {
   })
   const r = release.data
   return (
-    <div className="flex h-10 items-center gap-3 border-b border-line px-5 text-xs">
+    <div
+      className={`flex h-10 shrink-0 items-center gap-3 border-b px-6 text-xs ${
+        r?.available ? 'border-accent-border bg-accent-soft text-accent-text' : 'border-line bg-sidebar/50 text-muted'
+      }`}
+    >
       {r?.available ? (
         <>
-          <span className="text-accent">Update available: {r.name}</span>
-          <Button small variant="primary" onClick={() => update.mutate(undefined)} disabled={update.isPending}>
-            Update
+          <SparklesIcon className="size-3.5 shrink-0" />
+          <span className="font-medium">Update available: {r.name}</span>
+          <Button small variant="primary" className="ml-auto" onClick={() => update.mutate(undefined)} disabled={update.isPending}>
+            Update now
           </Button>
         </>
       ) : (
-        <span className="text-muted">{r ? `Up to date${r.name ? ` with ${r.name}` : ''}` : release.error ? 'Could not check for updates' : 'Checking for updates'}</span>
+        <span>
+          {r
+            ? `Up to date${r.name ? ` with ${r.name}` : ''}`
+            : release.error
+              ? 'Could not check for updates'
+              : 'Checking for updates…'}
+        </span>
       )}
     </div>
   )

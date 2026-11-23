@@ -1,6 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
 import { memo, useMemo, useState } from 'react'
-import { Button, Empty, ErrorLine, Input, Segmented, Select, Toggle } from '../../components/ui'
+import {
+  CloseIcon,
+  CubeIcon,
+  GitBranchIcon,
+  PlusIcon,
+  RefreshIcon,
+  SearchIcon,
+  SparklesIcon,
+} from '../../components/Icons'
+import { Button, Empty, ErrorLine, Input, Segmented, Select, Tag, Toggle } from '../../components/ui'
 import { call } from '../../lib/api'
 import { askConfirm, keys, packKeys, useAction, useApp } from '../../lib/store'
 import type { ContentFolder, FileRow, ModUpdate, PackInfo, Side } from '../../lib/types'
@@ -45,7 +54,7 @@ export function ModsTab({ p }: { p: PackInfo }) {
   return (
     <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-wrap items-center gap-2 px-5 py-3">
+        <div className="flex flex-wrap items-center gap-2.5 border-b border-line px-6 py-3">
           <Segmented
             value={folder}
             onChange={setFolder}
@@ -53,40 +62,68 @@ export function ModsTab({ p }: { p: PackInfo }) {
               value: f,
               label: (
                 <>
-                  {FOLDERS[f]} <span className="tabular-nums text-[#666]">{counts[f]}</span>
+                  {FOLDERS[f]}
+                  <span className="font-mono text-[11px] text-subtle tabular-nums">{counts[f]}</span>
                 </>
               ),
             }))}
           />
-          <Input placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} className="w-40" />
+          <Input
+            icon={<SearchIcon className="size-3.5" />}
+            placeholder="Filter"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="w-48"
+          />
           <span className="flex-1" />
           {!readOnly && (
             <>
-              <Button onClick={() => check.mutate(undefined)} disabled={check.isPending}>
-                Check for updates
+              <Button small onClick={() => check.mutate(undefined)} disabled={check.isPending}>
+                <RefreshIcon className="size-3.5" />
+                Check updates
               </Button>
-              <Button variant={adding ? 'default' : 'primary'} onClick={() => setAdding(!adding)}>
+              <Button small variant={adding ? 'default' : 'primary'} onClick={() => setAdding(!adding)}>
+                {adding ? <CloseIcon className="size-3.5" /> : <PlusIcon className="size-3.5" />}
                 {adding ? 'Done adding' : 'Add mods'}
               </Button>
             </>
           )}
         </div>
+
         {!readOnly && p.config.upstream && <UpstreamLine path={path} name={p.config.upstream.name} />}
+
         {updates && updates.length > 0 && (
-          <div className="flex h-10 items-center gap-3 border-y border-line px-5 text-xs">
-            <span className="text-accent">
-              {updates.length} update{updates.length > 1 ? 's' : ''} available
+          <div className="flex h-10 shrink-0 items-center gap-3 border-b border-accent-border bg-accent-soft px-6 text-xs text-accent-text">
+            <SparklesIcon className="size-3.5 shrink-0" />
+            <span className="font-medium">
+              {updates.length} mod update{updates.length > 1 ? 's' : ''} available
             </span>
-            <Button small variant="primary" disabled={apply.isPending} onClick={() => apply.mutate(updates)}>
+            <Button small variant="primary" className="ml-auto" disabled={apply.isPending} onClick={() => apply.mutate(updates)}>
               Update all
             </Button>
           </div>
         )}
-        <div className="@container min-h-0 flex-1 overflow-auto border-t border-line">
-          <ErrorLine error={files.error} />
+
+        <div className="@container min-h-0 flex-1 overflow-auto">
+          {files.error && (
+            <div className="p-6 pb-0">
+              <ErrorLine error={files.error} />
+            </div>
+          )}
           {files.data && rows.length === 0 && (
-            <Empty action={!readOnly && !adding && <Button onClick={() => setAdding(true)}>Add mods</Button>}>
-              {q ? 'Nothing matches the filter' : `No ${FOLDERS[folder].toLowerCase()} yet`}
+            <Empty
+              icon={<CubeIcon className="size-5" />}
+              title={q ? 'No matching files' : `No ${FOLDERS[folder].toLowerCase()} yet`}
+              action={
+                !readOnly && !adding && !q ? (
+                  <Button variant="primary" onClick={() => setAdding(true)}>
+                    <PlusIcon className="size-3.5" />
+                    Add mods
+                  </Button>
+                ) : undefined
+              }
+            >
+              {q ? 'Try a different filter term.' : 'Search Modrinth to add content compatible with this pack.'}
             </Empty>
           )}
           {rows.map((f) => (
@@ -138,37 +175,70 @@ const ModRow = memo(function ModRow({
   })
   const filename = file.path.split('/').pop()
   return (
-    <div className={`grid h-10 grid-cols-[36px_minmax(0,1fr)_minmax(0,150px)_112px_96px] items-center @max-[700px]:grid-cols-[36px_minmax(0,1fr)_112px_96px] gap-3 border-b border-line px-5 hover:bg-hover ${file.enabled ? '' : 'opacity-50'}`}>
-      <Toggle checked={file.enabled} onChange={(v) => toggle.mutate(v)} disabled={readOnly || toggle.isPending} label={undefined} />
+    <div
+      className={`group grid min-h-11.5 grid-cols-[36px_minmax(0,1fr)_minmax(0,140px)_112px_auto] items-center @max-[720px]:grid-cols-[36px_minmax(0,1fr)_104px_auto] gap-3 border-b border-line px-6 py-1.5 transition-colors hover:bg-hover ${
+        file.enabled ? '' : 'opacity-50'
+      }`}
+    >
+      <Toggle
+        checked={file.enabled}
+        onChange={(v) => toggle.mutate(v)}
+        disabled={readOnly || toggle.isPending}
+        ariaLabel={`Enable ${file.name}`}
+      />
       <div className="min-w-0 truncate" title={filename}>
-        <span>{file.name}</span>
-        <span className="ml-2 text-xs text-[#555]">{filename}</span>
+        <span className="font-medium text-fg">{file.name}</span>
+        {filename && <span className="ml-2 font-mono text-[11px] text-subtle @max-[480px]:hidden">{filename}</span>}
       </div>
-      <span className="truncate text-xs text-muted @max-[700px]:hidden" title={file.version ?? ''}>
+      <span className="truncate font-mono text-[11.5px] text-muted @max-[720px]:hidden" title={file.version ?? ''}>
         {file.version}
       </span>
-      {readOnly ? (
-        <span className="text-xs text-muted">{SIDES.find((s) => s.value === file.side)?.label}</span>
-      ) : (
-        <Select value={file.side} onChange={(s) => side.mutate(s)} options={SIDES} className="h-7 w-full text-xs" />
-      )}
+      <div>
+        {readOnly ? (
+          <Tag tone="muted" className="justify-self-start">
+            {SIDES.find((s) => s.value === file.side)?.label}
+          </Tag>
+        ) : (
+          <Select
+            aria-label={`Side for ${file.name}`}
+            size="sm"
+            value={file.side}
+            onChange={(s) => side.mutate(s)}
+            options={SIDES}
+            className="w-full"
+          />
+        )}
+      </div>
       <div className="flex justify-end gap-1">
         {update && (
-          <Button small variant="primary" disabled={updating} onClick={() => onUpdate(update)} title={`${update.current ?? ''} → ${update.entry.version ?? ''}`}>
+          <Button
+            small
+            variant="primary"
+            disabled={updating}
+            onClick={() => onUpdate(update)}
+            title={`${update.current ?? ''} → ${update.entry.version ?? ''}`}
+          >
             Update
           </Button>
         )}
         {!readOnly && (
           <Button
-            small
-            variant="ghost"
+            size="icon"
+            variant="ghost-danger"
+            className="opacity-65 group-hover:opacity-100 focus-visible:opacity-100"
             aria-label={`Remove ${file.name}`}
             title="Remove"
             onClick={() =>
-              askConfirm({ title: `Remove ${file.name}?`, body: 'The file is deleted from the pack folder.', action: 'Remove', danger: true, onConfirm: () => remove.mutate(undefined) })
+              askConfirm({
+                title: `Remove ${file.name}?`,
+                body: 'The file is deleted from the pack folder.',
+                action: 'Remove',
+                danger: true,
+                onConfirm: () => remove.mutate(undefined),
+              })
             }
           >
-            ✕
+            <CloseIcon className="size-3.5" />
           </Button>
         )}
       </div>
@@ -194,14 +264,21 @@ function UpstreamLine({ path, name }: { path: string; name: string }) {
   })
   const u = info.data
   return (
-    <div className="flex h-10 items-center gap-3 border-t border-line px-5 text-xs">
-      <span className="text-muted">Based on {name}</span>
+    <div
+      className={`flex h-10 shrink-0 items-center gap-2.5 border-b px-6 text-xs ${
+        u?.available ? 'border-info-border bg-info-soft text-info' : 'border-line bg-sidebar/40 text-muted'
+      }`}
+    >
+      <GitBranchIcon className="size-3.5 shrink-0" />
+      <span>
+        Based on <span className="font-medium text-fg-secondary">{name}</span>
+      </span>
       {u?.available ? (
-        <Button small variant="primary" onClick={() => pull.mutate(undefined)} disabled={pull.isPending}>
-          Get updates from {name} ({u.version})
+        <Button small variant="primary" className="ml-auto" onClick={() => pull.mutate(undefined)} disabled={pull.isPending}>
+          Get updates ({u.version})
         </Button>
       ) : (
-        <span className="text-muted">{u ? `Up to date (${u.version})` : info.error ? 'Could not check' : ''}</span>
+        <span className="text-subtle">{u ? `Up to date (${u.version})` : info.error ? 'Could not check' : ''}</span>
       )}
     </div>
   )
