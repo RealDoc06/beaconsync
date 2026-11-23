@@ -80,7 +80,7 @@ function NewPackDialog({ onClose }: { onClose: () => void }) {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="My pack"
-              onKeyDown={(e) => e.key === 'Enter' && canCreate && create.mutate(undefined)}
+              onKeyDown={(e) => e.key === 'Enter' && !e.nativeEvent.isComposing && canCreate && create.mutate(undefined)}
             />
           )}
         </Field>

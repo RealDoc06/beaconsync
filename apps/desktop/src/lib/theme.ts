@@ -10,7 +10,8 @@ export type ResolvedTheme = 'light' | 'dark'
 
 const STORAGE_KEY = 'beaconsync-theme'
 
-// Kept in sync with `--c-shell` in `src/index.css` and `backgroundColor` in `src-tauri/tauri.conf.json`.
+// Kept in sync with `--c-shell` in `src/index.css` and `backgroundColor` in `src-tauri/tauri.conf.json`
+// and `src-tauri/tauri.windows.conf.json` (which repeats the whole window entry).
 const WINDOW_BG: Record<ResolvedTheme, string> = {
   dark: '#08090c',
   light: '#ebe8e0',

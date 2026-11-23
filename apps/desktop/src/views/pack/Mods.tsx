@@ -176,7 +176,7 @@ const ModRow = memo(function ModRow({
   const filename = file.path.split('/').pop()
   return (
     <div
-      className={`group grid min-h-11.5 grid-cols-[36px_minmax(0,1fr)_minmax(0,140px)_112px_auto] items-center @max-[720px]:grid-cols-[36px_minmax(0,1fr)_104px_auto] @max-[480px]:grid-cols-[36px_minmax(0,1fr)_auto] gap-3 border-b border-line px-6 py-1.5 transition-colors hover:bg-hover ${
+      className={`group grid min-h-11.5 grid-cols-[36px_minmax(0,1fr)_minmax(0,140px)_112px_auto] items-center @max-[720px]:grid-cols-[36px_minmax(0,1fr)_104px_auto] gap-3 border-b border-line px-6 py-1.5 transition-colors hover:bg-hover ${
         file.enabled ? '' : 'opacity-50'
       }`}
     >
@@ -193,7 +193,7 @@ const ModRow = memo(function ModRow({
       <span className="truncate font-mono text-[11.5px] text-muted @max-[720px]:hidden" title={file.version ?? ''}>
         {file.version}
       </span>
-      <div className="@max-[480px]:hidden">
+      <div>
         {readOnly ? (
           <Tag tone="muted" className="justify-self-start">
             {SIDES.find((s) => s.value === file.side)?.label}

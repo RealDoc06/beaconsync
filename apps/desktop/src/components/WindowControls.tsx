@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 /**
  * Windows caption buttons for the undecorated main window (`tauri.windows.conf.json` sets
  * `decorations: false`). Glyphs come from the system icon font, so they match native apps;
- * sizes and hover colors follow the Windows 11 caption spec.
+ * sizes and hover colors follow the Windows 11 caption spec. Like native caption buttons they
+ * stay out of the Tab order (keyboard users have Alt+F4 and Win+arrows), and they sit above
+ * dialog backdrops (`z-50`) so the window can still be minimized or closed with a dialog open.
  */
 export function WindowControls() {
   const [maximized, setMaximized] = useState(false)
@@ -13,24 +15,25 @@ export function WindowControls() {
   useEffect(() => {
     const win = getCurrentWindow()
     const syncMaximized = () => void win.isMaximized().then(setMaximized)
-    syncMaximized()
     const unlisten = [
       win.onResized(syncMaximized),
       win.onFocusChanged(({ payload }) => setFocused(payload)),
     ]
+    syncMaximized()
+    void win.isFocused().then(setFocused)
     return () => unlisten.forEach((p) => void p.then((off) => off()))
   }, [])
 
   const win = getCurrentWindow()
   return (
-    <div className={`flex self-stretch ${focused ? 'text-fg' : 'text-subtle'}`}>
-      <Caption label="Minimize" glyph={''} onClick={() => void win.minimize()} />
+    <div className={`relative z-[60] flex self-stretch ${focused ? 'text-fg' : 'text-subtle'}`}>
+      <Caption label="Minimize" glyph={'\uE921'} onClick={() => void win.minimize()} />
       <Caption
         label={maximized ? 'Restore' : 'Maximize'}
-        glyph={maximized ? '' : ''}
+        glyph={maximized ? '\uE923' : '\uE922'}
         onClick={() => void win.toggleMaximize()}
       />
-      <Caption label="Close" glyph={''} onClick={() => void win.close()} danger />
+      <Caption label="Close" glyph={'\uE8BB'} onClick={() => void win.close()} danger />
     </div>
   )
 }
