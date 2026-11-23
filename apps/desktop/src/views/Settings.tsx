@@ -1,29 +1,194 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useState, type ReactNode } from 'react'
+import {
+  CheckIcon,
+  FolderIcon,
+  KeyIcon,
+  MonitorIcon,
+  MoonIcon,
+  RefreshIcon,
+  ShieldCheckIcon,
+  SunIcon,
+  UserIcon,
+} from '../components/Icons'
 import { PageHeader } from '../components/PageHeader'
 import { useUpdate } from '../components/UpdateButton'
 import { Button, Field, Input, Tag } from '../components/ui'
 import { call } from '../lib/api'
 import { keys, useAction } from '../lib/store'
+import { useTheme, type ThemeMode } from '../lib/theme'
 import type { SettingsForm, SettingsView as Settings } from '../lib/types'
 
 export function SettingsView() {
   const settings = useQuery({ queryKey: keys.settings, queryFn: () => call('get_settings') })
   return (
     <>
-      <PageHeader title="Settings" />
-      <div className="min-h-0 flex-1 overflow-auto">{settings.data && <SettingsBody s={settings.data} />}</div>
+      <PageHeader title="Settings" subtitle="Appearance, hub account, updates, and launcher folders" />
+      <div className="min-h-0 flex-1 overflow-auto">
+        <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
+          <AppearanceSection />
+          {settings.data && <SettingsBody s={settings.data} />}
+        </div>
+      </div>
     </>
   )
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Card({
+  icon,
+  title,
+  description,
+  children,
+}: {
+  icon: ReactNode
+  title: string
+  description?: string
+  children: ReactNode
+}) {
   return (
-    <section className="grid grid-cols-[200px_minmax(0,460px)] gap-6 border-b border-line px-5 py-5">
-      <h2 className="font-semibold">{title}</h2>
-      <div className="flex flex-col gap-3">{children}</div>
+    <section className="overflow-hidden rounded-2xl border border-line bg-surface shadow-theme-xs">
+      <div className="flex items-start gap-3 border-b border-line bg-sidebar/40 px-5 py-3.5">
+        <div className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg border border-line bg-surface text-accent-text shadow-theme-xs">
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <h2 className="text-[13.5px] font-semibold tracking-tight text-fg">{title}</h2>
+          {description && <p className="text-xs text-muted">{description}</p>}
+        </div>
+      </div>
+      <div className="flex flex-col gap-4 p-5">{children}</div>
     </section>
+  )
+}
+
+function AppearanceSection() {
+  const mode = useTheme((s) => s.mode)
+  const setMode = useTheme((s) => s.setMode)
+
+  // Preview swatches mirror the light/dark tokens in `src/index.css`.
+  const cards: { mode: ThemeMode; label: string; hint: string; icon: ReactNode; preview: ReactNode }[] = [
+    {
+      mode: 'system',
+      label: 'System',
+      hint: 'Follow OS setting',
+      icon: <MonitorIcon className="size-3.5" />,
+      preview: (
+        <div className="relative h-14 w-full overflow-hidden rounded-lg border border-line">
+          <div className="absolute inset-0 flex">
+            <div className="flex w-1/2 bg-[#f8f7f4]">
+              <div className="w-1/3 border-r border-black/10 bg-[#f0eee8] p-1.5">
+                <div className="h-1.5 w-full rounded bg-[#9e5a04]/70" />
+                <div className="mt-1 h-1 w-3/4 rounded bg-black/15" />
+              </div>
+              <div className="flex-1 p-2">
+                <div className="h-2 w-2/3 rounded bg-black/15" />
+                <div className="mt-1.5 h-5 rounded border border-black/10 bg-white" />
+              </div>
+            </div>
+            <div className="flex w-1/2 bg-[#0c0d10]">
+              <div className="w-1/3 border-r border-white/10 bg-[#111318] p-1.5">
+                <div className="h-1.5 w-full rounded bg-[#f5b342]/70" />
+                <div className="mt-1 h-1 w-3/4 rounded bg-white/15" />
+              </div>
+              <div className="flex-1 p-2">
+                <div className="h-2 w-2/3 rounded bg-white/15" />
+                <div className="mt-1.5 h-5 rounded border border-white/10 bg-[#151820]" />
+              </div>
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      mode: 'light',
+      label: 'Light',
+      hint: 'Bright surfaces',
+      icon: <SunIcon className="size-3.5" />,
+      preview: (
+        <div className="flex h-14 w-full overflow-hidden rounded-lg border border-black/10 bg-[#f8f7f4]">
+          <div className="w-1/4 border-r border-black/10 bg-[#f0eee8] p-1.5">
+            <div className="h-1.5 w-full rounded bg-[#9e5a04]/80" />
+            <div className="mt-1.5 h-1 w-4/5 rounded bg-black/15" />
+            <div className="mt-1 h-1 w-3/5 rounded bg-black/10" />
+          </div>
+          <div className="flex flex-1 flex-col gap-1.5 p-2">
+            <div className="flex items-center justify-between">
+              <div className="h-1.5 w-10 rounded bg-black/20" />
+              <div className="h-2.5 w-6 rounded bg-[#9e5a04]" />
+            </div>
+            <div className="grid flex-1 grid-cols-2 gap-1.5">
+              <div className="rounded border border-black/10 bg-white" />
+              <div className="rounded border border-black/10 bg-white" />
+            </div>
+          </div>
+        </div>
+      ),
+    },
+    {
+      mode: 'dark',
+      label: 'Dark',
+      hint: 'Low-light surfaces',
+      icon: <MoonIcon className="size-3.5" />,
+      preview: (
+        <div className="flex h-14 w-full overflow-hidden rounded-lg border border-white/10 bg-[#0c0d10]">
+          <div className="w-1/4 border-r border-white/10 bg-[#111318] p-1.5">
+            <div className="h-1.5 w-full rounded bg-[#f5b342]/80" />
+            <div className="mt-1.5 h-1 w-4/5 rounded bg-white/15" />
+            <div className="mt-1 h-1 w-3/5 rounded bg-white/10" />
+          </div>
+          <div className="flex flex-1 flex-col gap-1.5 p-2">
+            <div className="flex items-center justify-between">
+              <div className="h-1.5 w-10 rounded bg-white/20" />
+              <div className="h-2.5 w-6 rounded bg-[#f5b342]" />
+            </div>
+            <div className="grid flex-1 grid-cols-2 gap-1.5">
+              <div className="rounded border border-white/10 bg-[#151820]" />
+              <div className="rounded border border-white/10 bg-[#151820]" />
+            </div>
+          </div>
+        </div>
+      ),
+    },
+  ]
+
+  return (
+    <Card icon={<SunIcon className="size-4" />} title="Appearance" description="Choose light, dark, or follow your operating system.">
+      <div className="grid grid-cols-3 gap-3">
+        {cards.map((c) => {
+          const active = mode === c.mode
+          return (
+            <button
+              key={c.mode}
+              type="button"
+              aria-pressed={active}
+              onClick={() => setMode(c.mode)}
+              className={`flex flex-col gap-2.5 rounded-xl border p-2.5 text-left transition-all ${
+                active
+                  ? 'border-accent bg-accent-soft/70 ring-1 ring-accent-border'
+                  : 'border-line bg-bg/50 hover:border-line-hover hover:bg-hover'
+              }`}
+            >
+              {c.preview}
+              <div className="flex items-center justify-between gap-1 px-0.5">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-fg">
+                    <span className={active ? 'text-accent-text' : 'text-muted'}>{c.icon}</span>
+                    {c.label}
+                  </div>
+                  <div className="truncate text-[11px] text-muted">{c.hint}</div>
+                </div>
+                {active && (
+                  <span className="grid size-4.5 shrink-0 place-items-center rounded-full bg-accent text-accent-fg">
+                    <CheckIcon className="size-3" />
+                  </span>
+                )}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </Card>
   )
 }
 
@@ -51,43 +216,51 @@ function SettingsBody({ s }: { s: Settings }) {
 
   return (
     <>
-      <Section title="Account">
-        <Field label="Hub">
-          <Input {...field('hub')} placeholder={s.hub} />
-        </Field>
+      <Card icon={<UserIcon className="size-4" />} title="Account & Hub" description="Sync packs, publish updates, and manage servers.">
+        <Field label="Hub URL">{(id) => <Input id={id} {...field('hub')} placeholder={s.hub} />}</Field>
         {s.signed_in ? <SignedIn username={s.username ?? ''} /> : <SignIn prepare={() => call('save_settings', { form })} />}
-      </Section>
+      </Card>
+
       {s.signed_in && (
-        <Section title="Approve a device">
-          <ApproveDevice />
-        </Section>
-      )}
-      <Section title="Updates">
-        <Updates />
-      </Section>
-      <Section title="CurseForge">
-        <Field label="API key" hint="Needed for CurseForge modpacks. Get one at console.curseforge.com">
-          <Input {...field('curseforge_key')} type="password" placeholder="Not set" />
-        </Field>
-      </Section>
-      <Section title="Folders">
-        <Field label="Instances folder">
-          <div className="flex gap-2">
-            <Input {...field('instances_dir')} placeholder={s.instances_dir} className="flex-1" />
-            <Button onClick={() => browse('instances_dir')}>Browse</Button>
-          </div>
-        </Field>
-        <Field
-          label="Prism Launcher"
-          hint={PRISM_HINT[s.prism]}
+        <Card
+          icon={<ShieldCheckIcon className="size-4" />}
+          title="Approve a device"
+          description="Authorize a CLI or server machine running beacon login."
         >
-          <div className="flex gap-2">
-            <Input {...field('prism_path')} placeholder="Use installed, else built in" className="flex-1" />
-            <Button onClick={() => browse('prism_path')}>Browse</Button>
-          </div>
+          <ApproveDevice />
+        </Card>
+      )}
+
+      <Card icon={<RefreshIcon className="size-4" />} title="Updates" description="BeaconSync checks GitHub releases automatically in the background.">
+        <Updates />
+      </Card>
+
+      <Card icon={<KeyIcon className="size-4" />} title="CurseForge" description="Optional API key to search and install CurseForge modpacks.">
+        <Field label="API key" hint="Get one at console.curseforge.com">
+          {(id) => <Input id={id} {...field('curseforge_key')} type="password" placeholder="Not set" />}
         </Field>
-      </Section>
-      <div className="px-5 py-4">
+      </Card>
+
+      <Card icon={<FolderIcon className="size-4" />} title="Folders" description="Where packs live and which Prism Launcher starts Minecraft.">
+        <Field label="Instances folder">
+          {(id) => (
+            <div className="flex gap-2">
+              <Input id={id} {...field('instances_dir')} placeholder={s.instances_dir} className="flex-1" />
+              <Button onClick={() => browse('instances_dir')}>Browse</Button>
+            </div>
+          )}
+        </Field>
+        <Field label="Prism Launcher" hint={PRISM_HINT[s.prism]}>
+          {(id) => (
+            <div className="flex gap-2">
+              <Input id={id} {...field('prism_path')} placeholder="Use installed, else built in" className="flex-1" />
+              <Button onClick={() => browse('prism_path')}>Browse</Button>
+            </div>
+          )}
+        </Field>
+      </Card>
+
+      <div className="flex items-center justify-end pb-4">
         <Button variant="primary" onClick={() => save.mutate(undefined)} disabled={save.isPending}>
           Save settings
         </Button>
@@ -107,16 +280,23 @@ function Updates() {
     onSuccess: (v) => qc.setQueryData(keys.update, v),
   })
   return (
-    <div className="flex items-center gap-3">
-      <span>
-        BeaconSync <span className="font-medium">{status?.current}</span>
+    <div className="flex items-center gap-3 rounded-xl border border-line bg-bg/60 px-4 py-3">
+      <span className="text-[13px] text-fg-secondary">
+        BeaconSync <span className="font-mono font-semibold text-fg">{status?.current}</span>
       </span>
       {status?.offer ? (
-        <Tag tone="accent">{status.offer.version} available</Tag>
+        <Tag tone="accent" dot>
+          {status.offer.version} available
+        </Tag>
       ) : (
-        status?.latest && <Tag tone="ok">Up to date</Tag>
+        status?.latest && (
+          <Tag tone="ok" dot>
+            Up to date
+          </Tag>
+        )
       )}
       <Button small className="ml-auto" disabled={check.isPending} onClick={() => check.mutate(undefined)}>
+        <RefreshIcon className="size-3.5" />
         Check for updates
       </Button>
     </div>
@@ -126,10 +306,16 @@ function Updates() {
 function SignedIn({ username }: { username: string }) {
   const out = useAction(() => call('sign_out'), { label: 'Signing out', invalidate: [keys.settings] })
   return (
-    <div className="flex items-center gap-3">
-      <span>
-        Signed in as <span className="font-medium">{username}</span>
-      </span>
+    <div className="flex items-center justify-between gap-3 rounded-xl border border-line bg-bg/60 px-4 py-3">
+      <div className="flex items-center gap-2.5">
+        <span className="grid size-7 place-items-center rounded-full bg-accent-soft text-xs font-semibold uppercase text-accent-text ring-1 ring-accent-border">
+          {username.slice(0, 1) || '?'}
+        </span>
+        <div className="text-[13px]">
+          <span className="text-muted">Signed in as </span>
+          <span className="font-semibold text-fg">{username}</span>
+        </div>
+      </div>
       <Button small onClick={() => out.mutate(undefined)}>
         Sign out
       </Button>
@@ -155,15 +341,21 @@ function SignIn({ prepare }: { prepare: () => Promise<unknown> }) {
   const ready = username.trim() !== '' && password !== '' && !signIn.isPending
   return (
     <form
-      className="flex flex-col gap-3"
+      className="flex flex-col gap-3 rounded-xl border border-line bg-bg/60 p-4"
       onSubmit={(e) => {
         e.preventDefault()
         if (ready) signIn.mutate(false)
       }}
     >
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-2.5">
         <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" autoComplete="username" />
-        <Input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" autoComplete="current-password" />
+        <Input
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          type="password"
+          autoComplete="current-password"
+        />
       </div>
       <div className="flex gap-2">
         <Button type="submit" variant="primary" disabled={!ready}>
@@ -186,18 +378,38 @@ function ApproveDevice() {
   })
   return (
     <Field label="Code shown by beacon login">
-      <div className="flex gap-2">
-        <Input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} placeholder="ABCD-1234" className="flex-1 font-mono" />
-        <Button disabled={!code.trim() || approve.isPending} onClick={() => approve.mutate(undefined)}>
-          Approve
-        </Button>
-      </div>
+      {(id) => (
+        <div className="flex gap-2">
+          <Input
+            id={id}
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            placeholder="ABCD-1234"
+            className="flex-1 font-mono tracking-wider"
+          />
+          <Button variant="primary" disabled={!code.trim() || approve.isPending} onClick={() => approve.mutate(undefined)}>
+            Approve
+          </Button>
+        </div>
+      )}
     </Field>
   )
 }
 
 const PRISM_HINT: Record<Settings['prism'], ReactNode> = {
-  installed: <Tag tone="ok">Using your Prism Launcher</Tag>,
-  built_in: <Tag tone="ok">Built in. Downloaded the first time you play</Tag>,
-  missing: <Tag tone="warn">No built-in Prism for this computer. Install it from prismlauncher.org to play</Tag>,
+  installed: (
+    <Tag tone="ok" dot>
+      Using your Prism Launcher
+    </Tag>
+  ),
+  built_in: (
+    <Tag tone="ok" dot>
+      Built in · downloaded on first play
+    </Tag>
+  ),
+  missing: (
+    <Tag tone="warn" dot>
+      No built-in Prism for this computer · install from prismlauncher.org
+    </Tag>
+  ),
 }

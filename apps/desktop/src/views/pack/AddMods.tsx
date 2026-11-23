@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useDeferredValue, useMemo, useState } from 'react'
+import { CheckIcon, DownloadIcon, PlusIcon, SearchIcon } from '../../components/Icons'
 import { Button, ErrorLine, Input, Segmented, Thumb } from '../../components/ui'
 import { call } from '../../lib/api'
 import { count } from '../../lib/format'
@@ -8,7 +9,7 @@ import type { FileRow, PackInfo, ProjectType } from '../../lib/types'
 
 const TYPES = [
   { value: 'mod', label: 'Mods' },
-  { value: 'resourcepack', label: 'Resource packs' },
+  { value: 'resourcepack', label: 'Resources' },
   { value: 'shader', label: 'Shaders' },
 ] as const satisfies readonly { value: ProjectType; label: string }[]
 
@@ -43,25 +44,45 @@ export function AddMods({ p, installed }: { p: PackInfo; installed: FileRow[] })
   })
 
   return (
-    <aside className="flex w-[380px] shrink-0 flex-col border-l border-line">
-      <div className="flex flex-col gap-2 p-3">
+    <aside className="flex w-[320px] xl:w-[370px] shrink-0 flex-col border-l border-line bg-sidebar">
+      <div className="flex flex-col gap-2.5 border-b border-line p-3.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-fg">Browse Modrinth</span>
+          <span className="font-mono text-[11px] text-muted">{p.minecraft}</span>
+        </div>
         <Segmented value={type} onChange={setType} options={TYPES} />
-        <Input autoFocus placeholder={`Search Modrinth for ${p.minecraft}`} value={q} onChange={(e) => setQ(e.target.value)} className="w-full" />
+        <Input
+          autoFocus
+          icon={<SearchIcon className="size-3.5" />}
+          placeholder={`Search for ${p.minecraft}…`}
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="w-full"
+        />
       </div>
-      <div className="min-h-0 flex-1 overflow-auto border-t border-line">
-        <ErrorLine error={results.error} />
-        {results.data?.hits.length === 0 && <div className="p-4 text-muted">Nothing found for this version</div>}
+      <div className="min-h-0 flex-1 overflow-auto divide-y divide-line">
+        {results.error && (
+          <div className="p-3.5">
+            <ErrorLine error={results.error} />
+          </div>
+        )}
+        {results.data?.hits.length === 0 && (
+          <div className="p-6 text-center text-xs text-muted">Nothing found for Minecraft {p.minecraft}</div>
+        )}
         {results.data?.hits.map((h) => {
           const inPack = have.has(h.project_id) || added.has(h.project_id)
           return (
-            <div key={h.project_id} className="flex gap-2.5 border-b border-line px-3 py-2.5">
-              <Thumb src={h.icon_url} size={32} />
+            <div key={h.project_id} className="flex items-start gap-3 px-3.5 py-3 transition-colors hover:bg-hover">
+              <Thumb src={h.icon_url} size={36} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-baseline justify-between gap-2">
-                  <span className="truncate font-medium">{h.title}</span>
-                  <span className="shrink-0 text-[11px] text-[#666]">{count(h.downloads)}</span>
+                  <span className="truncate font-semibold text-fg">{h.title}</span>
+                  <span className="inline-flex shrink-0 items-center gap-0.5 font-mono text-[10.5px] text-subtle">
+                    <DownloadIcon className="size-2.5" />
+                    {count(h.downloads)}
+                  </span>
                 </div>
-                <div className="line-clamp-2 text-xs text-muted">{h.description}</div>
+                <div className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-muted">{h.description}</div>
               </div>
               <Button
                 small
@@ -70,7 +91,17 @@ export function AddMods({ p, installed }: { p: PackInfo; installed: FileRow[] })
                 disabled={inPack || add.isPending}
                 onClick={() => add.mutate({ id: h.project_id, title: h.title })}
               >
-                {inPack ? 'Added' : 'Add'}
+                {inPack ? (
+                  <>
+                    <CheckIcon className="size-3 text-ok" />
+                    Added
+                  </>
+                ) : (
+                  <>
+                    <PlusIcon className="size-3" />
+                    Add
+                  </>
+                )}
               </Button>
             </div>
           )

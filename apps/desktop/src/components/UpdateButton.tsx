@@ -1,12 +1,13 @@
-// The app's own update, like Musicah's: a small button next to the logo when a newer
-// BeaconSync is out. Click downloads (the border fills as progress), click again installs
-// and restarts. Hover or focus shows the release notes.
+// The app's own update button next to the brand mark when a newer BeaconSync is out.
+// Click downloads (the border fills as progress), click again installs and restarts.
+// Hover or focus shows the release notes popover.
 
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { call } from '../lib/api'
 import { keys, useApp } from '../lib/store'
 import type { UpdateView } from '../lib/types'
+import { ExternalLinkIcon } from './Icons'
 
 type Offer = NonNullable<UpdateView['offer']>
 
@@ -36,7 +37,12 @@ export function UpdateButton() {
   const pct = offer.total > 0 ? Math.min(100, Math.floor((offer.downloaded / offer.total) * 100)) : 0
   const busy = offer.phase === 'downloading' || offer.phase === 'verifying' || offer.phase === 'installing'
   const filled = offer.phase === 'ready' ? 100 : busy ? pct : 0
-  const tone = offer.phase === 'failed' ? 'text-bad' : offer.phase === 'ready' ? 'text-ok' : 'text-accent'
+  const tone =
+    offer.phase === 'failed'
+      ? 'text-bad bg-bad-soft border-bad-border'
+      : offer.phase === 'ready'
+        ? 'text-ok bg-ok-soft border-ok-border'
+        : 'text-accent-text bg-accent-soft border-accent-border'
   const text = copy[offer.phase]
   const act = async () => {
     try {
@@ -62,16 +68,16 @@ export function UpdateButton() {
         aria-label={text.label(offer, pct)}
         aria-busy={busy}
         onClick={() => void act()}
-        className={`relative grid size-7 place-items-center rounded-md hover:bg-hover ${tone}`}
+        className={`relative grid size-7 place-items-center rounded-lg border transition-colors ${tone}`}
       >
         {(busy || offer.phase === 'ready') && (
-          <svg viewBox="0 0 28 28" className="absolute inset-0 size-7" aria-hidden="true">
-            <path d={OUTLINE} fill="none" stroke="#262626" strokeWidth="1.5" />
+          <svg viewBox="0 0 28 28" className="absolute -inset-px size-7" aria-hidden="true">
+            <path d={OUTLINE} fill="none" stroke="var(--c-line-strong)" strokeWidth="1.5" />
             <path
               d={OUTLINE}
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.5"
+              strokeWidth="1.75"
               pathLength={100}
               strokeDasharray="100"
               strokeDashoffset={100 - filled}
@@ -83,17 +89,18 @@ export function UpdateButton() {
       </button>
       {open && (
         // Padding instead of a margin, so moving the pointer into the panel keeps it open.
-        <div className="absolute top-full left-0 z-50 pt-2">
-          <section className="flex w-80 flex-col gap-2 rounded-md border border-line-strong bg-bg p-3 shadow-[0_8px_30px_#000]">
-            <strong>{text.label(offer, pct)}</strong>
-            <p className="text-muted">{offer.error && offer.phase !== 'available' ? offer.error : text.body}</p>
+        <div className="animate-dialog absolute top-full left-0 z-50 pt-2">
+          <section className="flex max-h-[calc(100vh-110px)] w-80 flex-col gap-2.5 overflow-auto rounded-xl border border-line-strong bg-surface p-3.5 shadow-theme-md">
+            <strong className="text-[13px] font-semibold text-fg">{text.label(offer, pct)}</strong>
+            <p className="text-xs text-muted">{offer.error && offer.phase !== 'available' ? offer.error : text.body}</p>
             <Notes markdown={offer.notes} />
             <button
               type="button"
-              className="self-start text-xs text-accent hover:underline"
+              className="inline-flex items-center gap-1 self-start text-xs font-medium text-accent-text hover:underline"
               onClick={() => void call('open_external', { target: offer.url })}
             >
-              Release on GitHub ›
+              Release on GitHub
+              <ExternalLinkIcon className="size-3" />
             </button>
           </section>
         </div>
@@ -110,7 +117,7 @@ function Icon({ phase }: { phase: Offer['phase'] }) {
         ? 'M8 4v5M8 11.5v.5' // !
         : 'M8 2.5v8M4.5 7.5 8 11l3.5-3.5M3.5 13.5h9' // download
   return (
-    <svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d={d} />
     </svg>
   )
@@ -125,14 +132,14 @@ function Notes({ markdown }: { markdown: string }) {
     .map((l) => ({ heading: /^#|^\*\*[^*]+\*\*$/.test(l), text: l.replace(/^#+\s*|\*\*|`/g, '') }))
   if (!lines.length) return null
   return (
-    <div className="flex max-h-72 flex-col gap-1 overflow-auto border-t border-line pt-2 text-xs leading-5 select-text">
+    <div className="flex max-h-64 flex-col gap-1 overflow-auto border-t border-line pt-2.5 text-xs leading-5 select-text">
       {lines.map((l, i) =>
         l.heading ? (
-          <div key={i} className="mt-1 font-semibold first:mt-0">
+          <div key={i} className="mt-1.5 font-semibold text-fg first:mt-0">
             {l.text}
           </div>
         ) : (
-          <div key={i} className="text-[#cfcfcf]">
+          <div key={i} className="text-fg-secondary">
             {l.text.startsWith('- ') ? `· ${l.text.slice(2)}` : l.text}
           </div>
         ),

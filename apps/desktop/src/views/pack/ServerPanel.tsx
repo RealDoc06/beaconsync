@@ -3,7 +3,17 @@
 // so it works wherever the server runs.
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Button, Empty, Input, Tabs } from '../../components/ui'
+import {
+  ArchiveIcon,
+  ChevronLeftIcon,
+  PlayIcon,
+  RefreshIcon,
+  StopIcon,
+  TerminalIcon,
+  TrashIcon,
+  UndoIcon,
+} from '../../components/Icons'
+import { Button, Empty, Input, Tabs, Tag, type TagTone } from '../../components/ui'
 import { call } from '../../lib/api'
 import { ago } from '../../lib/format'
 import { askConfirm, useApp } from '../../lib/store'
@@ -84,22 +94,31 @@ export function ServerPanel({
     }
   }
   const state = !live.loaded ? 'connecting' : !live.online ? 'offline' : live.running ? 'running' : 'stopped'
-  const tone = { connecting: 'text-muted', offline: 'text-[#444]', running: 'text-ok', stopped: 'text-warn' }[state]
+  const stateTones = { connecting: 'muted', offline: 'muted', running: 'ok', stopped: 'warn' } as const satisfies Record<
+    typeof state,
+    TagTone
+  >
+  const tone: TagTone = stateTones[state]
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-3 px-5 py-3">
+      <div className="flex flex-wrap items-center gap-2.5 border-b border-line bg-sidebar/40 px-6 py-3">
         <Button variant="ghost" small onClick={onBack}>
-          ‹ Servers
+          <ChevronLeftIcon className="size-3.5" />
+          Servers
         </Button>
-        <span className={tone}>●</span>
-        <span className="font-semibold">{server.name}</span>
+        <span className="h-4 border-l border-line-strong" />
+        <span className="font-semibold text-fg">{server.name}</span>
+        <Tag tone={tone} dot>
+          {state}
+        </Tag>
         <span className="min-w-0 truncate text-xs text-muted">
-          {state} · {version} · <span className="font-mono">{server.address}</span> · beacon {server.agent_version ?? 'unknown'}
+          {version} · <span className="font-mono">{server.address}</span> · beacon {server.agent_version ?? 'unknown'}
         </span>
         <span className="flex-1" />
         {latest && (
           <Button
+            small
             disabled={!live.online}
             onClick={() =>
               askConfirm({
@@ -110,11 +129,14 @@ export function ServerPanel({
               })
             }
           >
+            <RefreshIcon className="size-3.5" />
             Update beacon
           </Button>
         )}
         {live.running ? (
           <Button
+            small
+            variant="danger"
             disabled={!live.online}
             onClick={() =>
               askConfirm({
@@ -126,14 +148,17 @@ export function ServerPanel({
               })
             }
           >
+            <StopIcon className="size-3" />
             Stop
           </Button>
         ) : (
-          <Button disabled={!live.online} onClick={() => void send({ kind: 'start' })}>
+          <Button small variant="primary" disabled={!live.online} onClick={() => void send({ kind: 'start' })}>
+            <PlayIcon className="size-3" />
             Start
           </Button>
         )}
         <Button
+          small
           disabled={!live.online}
           onClick={() =>
             askConfirm({
@@ -144,18 +169,35 @@ export function ServerPanel({
             })
           }
         >
+          <RefreshIcon className="size-3.5" />
           Restart
         </Button>
       </div>
+
       <Tabs
         value={tab}
         onChange={setTab}
         tabs={[
-          { value: 'console', label: 'Console' },
-          { value: 'backups', label: <>Backups <span className="text-muted">{live.backups.length}</span></> },
+          { value: 'console', label: 'Console', icon: <TerminalIcon className="size-3.5" /> },
+          {
+            value: 'backups',
+            icon: <ArchiveIcon className="size-3.5" />,
+            label: (
+              <span className="flex items-center gap-1.5">
+                Backups
+                <span className="rounded-full bg-surface-2 px-1.5 py-px font-mono text-[10.5px] text-muted tabular-nums">
+                  {live.backups.length}
+                </span>
+              </span>
+            ),
+          },
         ]}
       />
-      {live.error && <div className="px-5 py-1 text-xs text-bad">{live.error}</div>}
+
+      {live.error && (
+        <div className="border-b border-bad-border bg-bad-soft px-6 py-1.5 text-xs text-bad">{live.error}</div>
+      )}
+
       {tab === 'console' ? (
         <Console lines={live.lines} disabled={!live.running} onSend={(c) => void send({ kind: 'command', arg: c })} />
       ) : (
@@ -166,11 +208,11 @@ export function ServerPanel({
 }
 
 function lineTone(l: string) {
-  if (l.startsWith('[beacon]')) return 'text-accent'
+  if (l.startsWith('[beacon]')) return 'text-accent-text'
   if (l.startsWith('> ')) return 'text-fg font-semibold'
   if (l.includes('/ERROR]') || l.includes(' ERROR ')) return 'text-bad'
   if (l.includes('/WARN]') || l.includes(' WARN ')) return 'text-warn'
-  return 'text-[#cfcfcf]'
+  return 'text-fg-secondary'
 }
 
 function Console({ lines, disabled, onSend }: { lines: string[]; disabled: boolean; onSend: (command: string) => void }) {
@@ -202,16 +244,16 @@ function Console({ lines, disabled, onSend }: { lines: string[]; disabled: boole
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col bg-console">
       <div
         ref={box}
         onScroll={(e) => {
           const el = e.currentTarget
           follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
         }}
-        className="min-h-0 flex-1 overflow-auto px-5 py-2 font-mono text-xs leading-5 select-text"
+        className="min-h-0 flex-1 overflow-auto px-6 py-3 font-mono text-xs leading-5 select-text"
       >
-        {lines.length === 0 && <div className="text-muted">Waiting for output…</div>}
+        {lines.length === 0 && <div className="text-subtle">Waiting for server output…</div>}
         {lines.map((l, i) => (
           <div key={i} className={`whitespace-pre-wrap break-all ${lineTone(l)}`}>
             {l}
@@ -219,13 +261,13 @@ function Console({ lines, disabled, onSend }: { lines: string[]; disabled: boole
         ))}
       </div>
       <form
-        className="flex items-center gap-2 border-t border-line px-5 py-2"
+        className="flex items-center gap-2.5 border-t border-line bg-surface px-6 py-2.5 focus-within:border-accent"
         onSubmit={(e) => {
           e.preventDefault()
           submit()
         }}
       >
-        <span className="font-mono text-muted">&gt;</span>
+        <span className="font-mono text-xs font-semibold text-accent-text">&gt;</span>
         <input
           value={input}
           disabled={disabled}
@@ -236,9 +278,9 @@ function Console({ lines, disabled, onSend }: { lines: string[]; disabled: boole
             browse(e.key === 'ArrowUp' ? -1 : 1)
           }}
           placeholder={disabled ? 'Minecraft is not running' : 'Type a command, e.g. list or whitelist add Steve'}
-          className="h-8 min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-[#555] disabled:opacity-40"
+          className="h-8 min-w-0 flex-1 rounded-md bg-transparent px-2 font-mono text-xs text-fg outline-none placeholder:text-subtle disabled:opacity-40"
         />
-        <Button small type="submit" disabled={disabled || !input.trim()}>
+        <Button small variant="primary" type="submit" disabled={disabled || !input.trim()}>
           Send
         </Button>
       </form>
@@ -250,7 +292,8 @@ type Send = (a: ServerAction, done?: string) => Promise<boolean>
 
 const GB = 2 ** 30
 const DAY = 86_400
-const COLS = 'grid-cols-[16px_140px_120px_80px_110px_minmax(0,1fr)_auto]'
+const COLS =
+  'grid-cols-[18px_minmax(100px,135px)_105px_70px_102px_minmax(0,1fr)_auto] @max-[760px]:grid-cols-[18px_minmax(0,1fr)_96px_64px_auto]'
 
 const total = (bs: Backup[]) => bs.reduce((n, b) => n + b.size, 0)
 
@@ -302,15 +345,17 @@ function Backups({
     })
   }
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-      <div className="flex items-center gap-2 px-5 py-3">
-        <Button variant="primary" disabled={!online} onClick={() => void send({ kind: 'backup' }, 'Backing up. Follow along in the console.')}>
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto p-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button variant="primary" small disabled={!online} onClick={() => void send({ kind: 'backup' }, 'Backing up. Follow along in the console.')}>
+          <ArchiveIcon className="size-3.5" />
           Back up now
         </Button>
         <span className="text-xs text-muted">
-          Backups are also taken before every update. Backups made by mods like FTB Backups show up here too.
+          Backups are also taken before every update. Backups from mods like FTB Backups appear here too.
         </span>
       </div>
+
       {retention && (
         <RetentionRow
           key={JSON.stringify(retention)}
@@ -320,62 +365,97 @@ function Backups({
           send={send}
         />
       )}
-      <div className="border-t border-line">
-        {backups.length === 0 && <Empty>{online ? 'No backups yet.' : 'The server is offline.'}</Empty>}
-        {backups.length > 0 && (
-          <div className={`grid h-9 ${COLS} items-center gap-3 border-b border-line px-5 text-xs text-muted`}>
-            <input
-              type="checkbox"
-              aria-label="Select all backups"
-              checked={all}
-              ref={(el) => {
-                if (el) el.indeterminate = picked.length > 0 && !all
-              }}
-              onChange={() => setSelected(new Set(all ? [] : backups.map((b) => b.id)))}
-              className="accent-[#7ee8ff]"
-            />
-            <span className="col-span-5">
-              {picked.length ? `${picked.length} selected · ${size(total(picked))}` : `${backups.length} backups · ${size(total(backups))}`}
-            </span>
-            <span className="flex gap-1.5">
-              {picked.length > 0 && (
-                <>
-                  <Button small variant="ghost" onClick={() => setSelected(new Set())}>
-                    Clear
-                  </Button>
-                  <Button small variant="danger" disabled={!online} onClick={() => remove(picked)}>
-                    Delete {picked.length}
-                  </Button>
-                </>
-              )}
-            </span>
-          </div>
+
+      <div className="@container shrink-0 overflow-x-auto rounded-2xl border border-line bg-surface shadow-theme-xs">
+        {backups.length === 0 ? (
+          <Empty icon={<ArchiveIcon className="size-5" />} title={online ? 'No backups yet' : 'Server is offline'}>
+            {online ? 'Create a manual backup above or deploy an update.' : 'Backups will load once the server reconnects.'}
+          </Empty>
+        ) : (
+          <>
+            <div className="flex h-10 items-center gap-3 border-b border-line bg-sidebar/60 px-4 text-xs text-muted">
+              <input
+                type="checkbox"
+                aria-label="Select all backups"
+                checked={all}
+                ref={(el) => {
+                  if (el) el.indeterminate = picked.length > 0 && !all
+                }}
+                onChange={() => setSelected(new Set(all ? [] : backups.map((b) => b.id)))}
+                className="accent-accent"
+              />
+              <span className="min-w-0 flex-1 truncate font-medium text-fg-secondary">
+                {picked.length
+                  ? `${picked.length} selected · ${size(total(picked))}`
+                  : `${backups.length} backup${backups.length === 1 ? '' : 's'} · ${size(total(backups))}`}
+              </span>
+              <span className="flex shrink-0 justify-end gap-1.5">
+                {picked.length > 0 && (
+                  <>
+                    <Button small variant="ghost" onClick={() => setSelected(new Set())}>
+                      Clear
+                    </Button>
+                    <Button small variant="danger" disabled={!online} onClick={() => remove(picked)}>
+                      <TrashIcon className="size-3" />
+                      Delete {picked.length}
+                    </Button>
+                  </>
+                )}
+              </span>
+            </div>
+            <div className="divide-y divide-line">
+              {backups.map((b) => (
+                <div
+                  key={b.id}
+                  className={`grid min-h-12 ${COLS} items-center gap-3 px-4 py-1.5 transition-colors hover:bg-hover ${
+                    selected.has(b.id) ? 'bg-active' : ''
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${b.source} backup from ${ago(b.created)}`}
+                    checked={selected.has(b.id)}
+                    onChange={() => flip(b.id)}
+                    className="accent-accent"
+                  />
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-fg">{b.source}</div>
+                    <div className="mt-0.5 hidden min-w-0 items-center gap-1.5 text-[11px] text-muted @max-[760px]:flex">
+                      <span className="shrink-0 font-medium text-fg-secondary">{b.full ? 'Whole server' : 'World'}</span>
+                      {b.note && (
+                        <>
+                          <span className="text-subtle">·</span>
+                          <span className="truncate" title={b.note}>
+                            {b.note}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <span className="truncate text-xs text-muted" title={new Date(b.created * 1000).toLocaleString()}>
+                    {ago(b.created)}
+                  </span>
+                  <span className="text-right font-mono text-xs text-muted tabular-nums">{size(b.size)}</span>
+                  <div className="@max-[760px]:hidden">
+                    <Tag tone={b.full ? 'accent' : 'muted'}>{b.full ? 'Whole server' : 'World'}</Tag>
+                  </div>
+                  <span className="truncate text-xs text-muted @max-[760px]:hidden" title={b.id}>
+                    {b.note}
+                  </span>
+                  <span className="flex shrink-0 justify-end gap-1.5">
+                    <Button small disabled={!online} onClick={() => restore(b)}>
+                      <UndoIcon className="size-3" />
+                      Restore
+                    </Button>
+                    <Button small variant="danger" disabled={!online} onClick={() => remove([b])}>
+                      Delete
+                    </Button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
         )}
-        {backups.map((b) => (
-          <label
-            key={b.id}
-            className={`grid h-11 ${COLS} items-center gap-3 border-b border-line px-5 ${selected.has(b.id) ? 'bg-hover' : ''}`}
-          >
-            <input type="checkbox" checked={selected.has(b.id)} onChange={() => flip(b.id)} className="accent-[#7ee8ff]" />
-            <span className="truncate font-medium">{b.source}</span>
-            <span className="text-muted" title={new Date(b.created * 1000).toLocaleString()}>
-              {ago(b.created)}
-            </span>
-            <span className="text-right text-muted">{size(b.size)}</span>
-            <span className="text-xs text-muted">{b.full ? 'whole server' : 'world'}</span>
-            <span className="truncate text-xs text-muted" title={b.id}>
-              {b.note}
-            </span>
-            <span className="flex gap-1.5">
-              <Button small disabled={!online} onClick={() => restore(b)}>
-                Restore
-              </Button>
-              <Button small variant="danger" disabled={!online} onClick={() => remove([b])}>
-                Delete
-              </Button>
-            </span>
-          </label>
-        ))}
       </div>
     </div>
   )
@@ -442,30 +522,31 @@ function RetentionRow({ retention, own, online, send }: { retention: Retention; 
       <span>{label}</span>
       <Input
         inputMode="decimal"
+        inputSize="sm"
         value={draft[key]}
         placeholder="any"
         onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
-        className={`h-6! w-14 px-1.5! text-right text-xs ${parsed[value] === undefined ? 'border-bad!' : ''}`}
+        className={`w-15 text-right font-mono ${parsed[value] === undefined ? 'border-bad!' : ''}`}
       />
       <span>{unit}</span>
     </label>
   )
   return (
     <form
-      className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 pb-3 text-xs text-muted"
+      className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-line bg-surface px-4 py-3 text-xs text-muted shadow-theme-xs"
       onSubmit={(e) => {
         e.preventDefault()
         if (next && dirty) save(next)
       }}
     >
-      <span className="font-medium text-fg">Keep</span>
+      <span className="font-semibold text-fg">Keep</span>
       {field('keep', 'keep', 'last', 'backups')}
       {field('gb', 'max_bytes', 'up to', 'GB')}
       {field('days', 'max_days', 'up to', 'days old')}
-      <Button small type="submit" disabled={!online || !dirty || !next}>
+      <Button small variant={dirty ? 'primary' : 'default'} type="submit" disabled={!online || !dirty || !next}>
         Save
       </Button>
-      <span>Oldest BeaconSync backups go first; the newest always stays.</span>
+      <span className="text-subtle">Oldest BeaconSync backups go first; the newest always stays.</span>
     </form>
   )
 }

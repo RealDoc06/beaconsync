@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Button, Dialog, Empty, ErrorLine, Input, Select, Toggle } from '../../components/ui'
+import { GitBranchIcon, GitMergeIcon, HistoryIcon, PlusIcon, TrashIcon, UndoIcon } from '../../components/Icons'
+import { Button, Dialog, Empty, ErrorLine, Input, Select, Tag, Toggle } from '../../components/ui'
 import { call } from '../../lib/api'
 import { ago, shortId } from '../../lib/format'
 import { askConfirm, keys, packKeys, useAction, useApp } from '../../lib/store'
@@ -15,31 +16,48 @@ export function HistoryTab({ path, published }: { path: string; published: boole
     done: 'Went back to the older version',
   })
   const h = history.data
-  if (!h) return <ErrorLine error={history.error} />
+  if (!h) {
+    return history.error ? (
+      <div className="p-6">
+        <ErrorLine error={history.error} />
+      </div>
+    ) : null
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Branches path={path} h={h} />
-      <div className="min-h-0 flex-1 overflow-auto border-t border-line">
-        {h.log.length === 0 && <Empty>No saved versions yet</Empty>}
-        {h.log.map((e, i) => (
-          <VersionRow
-            key={e.id}
-            e={e}
-            current={e.id === h.head}
-            newer={i}
-            onRestore={() => setRollingBack(e)}
-            onReset={() =>
-              askConfirm({
-                title: 'Go back to this version?',
-                body: `The ${i} newer version${i === 1 ? '' : 's'} on this branch will be removed from History, and unsaved changes are replaced.`,
-                action: 'Go back',
-                danger: true,
-                onConfirm: () => reset.mutate(e.id),
-              })
-            }
-          />
-        ))}
+      <div className="@container min-h-0 flex-1 overflow-auto">
+        {h.log.length === 0 ? (
+          <Empty icon={<HistoryIcon className="size-5" />} title="No saved versions yet">
+            Make edits in Mods or configs, then save your first snapshot in the Changes tab.
+          </Empty>
+        ) : (
+          <div className="flex flex-col p-6">
+            <div className="overflow-hidden rounded-2xl border border-line bg-surface shadow-theme-xs">
+              {h.log.map((e, i) => (
+                <VersionRow
+                  key={e.id}
+                  e={e}
+                  current={e.id === h.head}
+                  first={i === 0}
+                  last={i === h.log.length - 1}
+                  newer={i}
+                  onRestore={() => setRollingBack(e)}
+                  onReset={() =>
+                    askConfirm({
+                      title: 'Go back to this version?',
+                      body: `The ${i} newer version${i === 1 ? '' : 's'} on this branch will be removed from History, and unsaved changes are replaced.`,
+                      action: 'Go back',
+                      danger: true,
+                      onConfirm: () => reset.mutate(e.id),
+                    })
+                  }
+                />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
       {rollingBack && <RollbackDialog path={path} e={rollingBack} published={published} onClose={() => setRollingBack(null)} />}
     </div>
@@ -73,12 +91,16 @@ function RollbackDialog({ path, e, published, onClose }: { path: string; e: LogE
       }
     >
       <div className="flex flex-col gap-4">
-        <p>
-          Files go back to <span className="font-medium">{e.message || shortId(e.id)}</span> and that is saved as a new version. Unsaved
-          changes are replaced. Nothing in History is lost.
+        <p className="leading-relaxed text-fg-secondary">
+          Files go back to <span className="font-semibold text-fg">{e.message || shortId(e.id)}</span> and that is saved as a
+          new version. Unsaved changes are replaced. Nothing in History is lost.
         </p>
         {published && <Toggle checked={everyone} onChange={setEveryone} label="Also roll back players and servers" />}
-        {published && everyone && <p className="text-xs text-muted">Publishes it as an update and deploys it to all servers.</p>}
+        {published && everyone && (
+          <p className="rounded-lg border border-accent-border bg-accent-soft px-3 py-2 text-xs text-accent-text">
+            Publishes this rollback as an update and deploys it to all connected servers.
+          </p>
+        )}
       </div>
     </Dialog>
   )
@@ -87,37 +109,70 @@ function RollbackDialog({ path, e, published, onClose }: { path: string; e: LogE
 function VersionRow({
   e,
   current,
+  first,
+  last,
   newer,
   onRestore,
   onReset,
 }: {
   e: LogEntry
   current: boolean
+  first: boolean
+  last: boolean
   newer: number
   onRestore: () => void
   onReset: () => void
 }) {
   return (
-    <div className="group grid h-11 grid-cols-[minmax(0,1fr)_100px_160px_300px] items-center gap-3 border-b border-line px-5 hover:bg-hover">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className={`size-1.5 shrink-0 rounded-full ${current ? 'bg-accent' : 'bg-[#333]'}`} />
-        <span className="truncate">{e.message || 'Untitled version'}</span>
-        {current && <span className="text-xs text-accent">Current</span>}
-        {e.parents.length > 1 && <span className="text-xs text-muted">merge</span>}
+    <div className="group grid min-h-13 grid-cols-[24px_minmax(0,1fr)_96px_156px_174px] @max-[720px]:grid-cols-[24px_minmax(0,1fr)_148px_166px] items-center gap-3 border-b border-line px-4 last:border-b-0 transition-colors hover:bg-hover">
+      {/* Vertical timeline spine + node */}
+      <div className="relative flex h-full items-center justify-center self-stretch">
+        {!first && <span className="absolute top-0 bottom-1/2 w-px bg-line-strong" />}
+        {!last && <span className="absolute top-1/2 bottom-0 w-px bg-line-strong" />}
+        <span
+          className={`relative z-10 rounded-full ${
+            current ? 'size-2.5 bg-accent ring-4 ring-accent-soft' : 'size-2 border border-line-hover bg-surface'
+          }`}
+        />
       </div>
-      <span className="truncate text-xs text-muted">{e.author}</span>
-      <span className="whitespace-nowrap text-xs text-muted" title={new Date(e.time * 1000).toLocaleString()}>
-        {ago(e.time)} · <span className="font-mono">{shortId(e.id)}</span>
+
+      <div className="flex min-w-0 items-center gap-2 py-2.5">
+        <span className={`truncate ${current ? 'font-semibold text-fg' : 'font-medium text-fg-secondary'}`}>
+          {e.message || 'Untitled version'}
+        </span>
+        {current && (
+          <Tag tone="accent" dot>
+            Current
+          </Tag>
+        )}
+        {e.parents.length > 1 && (
+          <Tag tone="info">
+            <GitMergeIcon className="size-3" />
+            Merge
+          </Tag>
+        )}
+      </div>
+
+      <span className="truncate text-xs text-muted @max-[720px]:hidden">{e.author}</span>
+
+      <span
+        className="flex items-center justify-end gap-1.5 whitespace-nowrap text-xs text-muted"
+        title={new Date(e.time * 1000).toLocaleString()}
+      >
+        <span className="truncate">{ago(e.time)}</span>
+        <span className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[10.5px] text-fg-secondary">{shortId(e.id)}</span>
       </span>
-      <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
+
+      <div className="flex justify-end gap-1 opacity-65 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
         {!current && (
           <>
             <Button small onClick={onRestore}>
-              Roll back to this
+              <UndoIcon className="size-3" />
+              Roll back
             </Button>
             {newer > 0 && (
-              <Button small variant="ghost" onClick={onReset}>
-                Go back to this version
+              <Button small variant="ghost-danger" onClick={onReset}>
+                Reset
               </Button>
             )}
           </>
@@ -152,27 +207,43 @@ function Branches({ path, h }: { path: string; h: History }) {
   })
 
   return (
-    <div className="flex h-12 shrink-0 items-center gap-2 px-5">
-      <span className="text-xs text-muted">Branch</span>
+    <div className="flex flex-wrap items-center gap-2 border-b border-line px-6 py-3">
+      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted">
+        <GitBranchIcon className="size-3.5 text-accent-text" />
+        Branch
+      </span>
       <Select
+        aria-label="Current branch"
+        size="sm"
         value={current || '(detached)'}
         onChange={(b) => switchTo.mutate(b)}
-        options={current ? h.branches.map((b) => ({ value: b.name, label: b.name })) : [{ value: '(detached)', label: 'Old version' }, ...h.branches.map((b) => ({ value: b.name, label: b.name }))]}
-        className="h-7 text-xs"
+        options={
+          current
+            ? h.branches.map((b) => ({ value: b.name, label: b.name }))
+            : [{ value: '(detached)', label: 'Old version' }, ...h.branches.map((b) => ({ value: b.name, label: b.name }))]
+        }
       />
-      <Button small variant="ghost" onClick={() => setCreating(true)}>
+      <Button small onClick={() => setCreating(true)}>
+        <PlusIcon className="size-3" />
         New branch
       </Button>
       {others.length > 0 && (
         <>
-          <span className="mx-2 h-4 border-l border-line" />
-          <Select value={from} onChange={setMergeFrom} options={others.map((b) => ({ value: b.name, label: b.name }))} className="h-7 text-xs" />
+          <span className="mx-1 h-4 border-l border-line-strong" />
+          <Select
+            aria-label="Branch to merge or delete"
+            size="sm"
+            value={from}
+            onChange={setMergeFrom}
+            options={others.map((b) => ({ value: b.name, label: b.name }))}
+          />
           <Button small variant="ghost" disabled={!current} onClick={() => merge.mutate(from)}>
+            <GitMergeIcon className="size-3" />
             Merge into {current || 'current'}
           </Button>
           <Button
             small
-            variant="ghost"
+            variant="ghost-danger"
             onClick={() =>
               askConfirm({
                 title: `Delete branch ${from}?`,
@@ -183,6 +254,7 @@ function Branches({ path, h }: { path: string; h: History }) {
               })
             }
           >
+            <TrashIcon className="size-3" />
             Delete {from}
           </Button>
         </>
@@ -208,14 +280,22 @@ function NewBranch({ path, onClose }: { path: string; onClose: () => void }) {
         <>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={!valid} onClick={() => create.mutate(undefined)}>
-            Create
+            Create branch
           </Button>
         </>
       }
     >
-      <div className="flex flex-col gap-2">
-        <Input value={name} onChange={(e) => setName(e.target.value)} className="w-full" placeholder="experiments" onKeyDown={(e) => e.key === 'Enter' && valid && create.mutate(undefined)} />
-        <p className="text-xs text-muted">A branch lets you try changes without touching the main pack. It starts from the current version.</p>
+      <div className="flex flex-col gap-2.5">
+        <Input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full font-mono"
+          placeholder="experiments"
+          onKeyDown={(e) => e.key === 'Enter' && valid && create.mutate(undefined)}
+        />
+        <p className="text-xs leading-relaxed text-muted">
+          A branch lets you try changes without touching the main pack. It starts from the current version.
+        </p>
       </div>
     </Dialog>
   )

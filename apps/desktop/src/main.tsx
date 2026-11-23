@@ -3,6 +3,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
 import './index.css'
+import { initTheme } from './lib/theme'
+
+// Apply saved or OS theme before first paint so light/dark never flickers.
+initTheme()
 
 const client = new QueryClient({
   defaultOptions: {

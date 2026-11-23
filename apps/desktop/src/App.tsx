@@ -1,12 +1,26 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listen } from '@tauri-apps/api/event'
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import logo from './assets/logo.svg'
 import { Conflicts } from './components/Conflicts'
+import {
+  AlertIcon,
+  CheckIcon,
+  CloseIcon,
+  LibraryIcon,
+  LinkCodeIcon,
+  MonitorIcon,
+  MoonIcon,
+  SettingsIcon,
+  SunIcon,
+  UserIcon,
+} from './components/Icons'
+import { InstanceIcon } from './components/InstanceIcon'
 import { Button, Dialog, ProgressBar, Select } from './components/ui'
 import { UpdateButton, useUpdate } from './components/UpdateButton'
 import { call } from './lib/api'
 import { askConfirm, keys, useAction, useApp, type View } from './lib/store'
+import { useTheme, type ThemeMode } from './lib/theme'
 import type { GameFailure, Progress, UpdateView } from './lib/types'
 import { ImportView } from './views/Import'
 import { JoinView } from './views/Join'
@@ -37,10 +51,10 @@ export function App() {
   }, [set, qc])
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-bg text-fg">
       <div className="flex min-h-0 flex-1">
         <Sidebar />
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="flex min-w-0 flex-1 flex-col bg-bg">
           <Page view={view} />
         </main>
       </div>
@@ -75,64 +89,163 @@ function Sidebar() {
   const version = useUpdate()?.current
   const tracked = library.data?.filter((i) => i.tracked) ?? []
 
-  const nav = (name: 'library' | 'join' | 'settings', label: string) => (
-    <button
-      type="button"
-      onClick={() => go({ name })}
-      className={`flex h-7 items-center rounded-md px-2 text-left ${view.name === name ? 'bg-[#141414] text-fg' : 'text-muted hover:text-fg'}`}
-    >
-      {label}
-    </button>
-  )
+  const nav = (name: 'library' | 'join' | 'settings', label: string, icon: ReactNode) => {
+    const active = view.name === name || (name === 'library' && view.name === 'import')
+    return (
+      <button
+        type="button"
+        onClick={() => go({ name })}
+        className={`group flex h-8.5 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-medium transition-colors ${
+          active ? 'bg-active text-fg ring-1 ring-accent-border' : 'text-muted hover:bg-hover hover:text-fg'
+        }`}
+      >
+        <span className={active ? 'text-accent-text' : 'text-muted transition-colors group-hover:text-fg-secondary'}>
+          {icon}
+        </span>
+        <span className="truncate">{label}</span>
+      </button>
+    )
+  }
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-line">
+    <aside className="flex w-56 shrink-0 flex-col border-r border-line bg-sidebar">
       {isMac && <div data-tauri-drag-region className="h-7 shrink-0" />}
-      <div data-tauri-drag-region className="flex h-12 items-center gap-2 px-4">
-        <img src={logo} alt="" className="size-6" />
-        <span className="font-semibold tracking-tight">BeaconSync</span>
-        {version && (
-          <span className="min-w-0 truncate text-[11px] text-[#555]" title={version}>
-            {version}
-          </span>
-        )}
+      <div data-tauri-drag-region className="flex h-13 shrink-0 items-center gap-2.5 px-3.5">
+        <div className="relative grid size-7 shrink-0 place-items-center rounded-lg ring-1 ring-accent-border/70">
+          <img src={logo} alt="" className="size-7 rounded-[7px]" />
+        </div>
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate text-[13.5px] font-semibold leading-tight tracking-tight text-fg">BeaconSync</span>
+          {version && (
+            <span className="truncate font-mono text-[10.5px] leading-tight text-subtle" title={version}>
+              v{version.replace(/^v/, '')}
+            </span>
+          )}
+        </div>
         <UpdateButton />
       </div>
-      <nav className="flex flex-col gap-0.5 px-2">
-        {nav('library', 'Library')}
-        {nav('join', 'Join with code')}
-        {nav('settings', 'Settings')}
+
+      <nav className="flex flex-col gap-0.5 px-2.5 pt-1">
+        {nav('library', 'Library', <LibraryIcon className="size-4" />)}
+        {nav('join', 'Join with code', <LinkCodeIcon className="size-4" />)}
+        {nav('settings', 'Settings', <SettingsIcon className="size-4" />)}
       </nav>
-      <div className="mx-4 my-3 border-t border-line" />
-      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2">
-        {tracked.map((i) => {
-          const active = view.name === 'pack' && view.path === i.path
-          return (
-            <button
-              key={i.path}
-              type="button"
-              onClick={() => go({ name: 'pack', path: i.path, tab: 'mods' })}
-              className={`flex h-7 items-center justify-between gap-2 rounded-md px-2 text-left ${active ? 'bg-[#141414] text-fg' : 'text-muted hover:text-fg'}`}
-            >
-              <span className="truncate">{i.name}</span>
-              <span className="shrink-0 text-[11px] text-[#555]">{i.role === 'subscriber' ? 'joined' : i.minecraft}</span>
-            </button>
-          )
-        })}
-      </div>
-      <MinecraftAccount />
-      <div className="flex h-10 items-center border-t border-line px-4 text-xs text-muted">
-        {settings.data?.signed_in ? (
-          <span className="truncate">
-            Signed in as <span className="text-fg">{settings.data.username}</span>
+
+      <div className="mx-3.5 my-3 border-t border-line" />
+
+      <div className="flex items-center justify-between px-3.5 pb-1.5">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.06em] text-subtle">Tracked packs</span>
+        {tracked.length > 0 && (
+          <span className="rounded-full bg-surface-2 px-1.5 py-px font-mono text-[10px] font-medium text-muted tabular-nums">
+            {tracked.length}
           </span>
-        ) : (
-          <button type="button" className="hover:text-fg" onClick={() => go({ name: 'settings' })}>
-            Not signed in
-          </button>
         )}
       </div>
+
+      <div className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2.5 pb-2">
+        {tracked.length === 0 ? (
+          <div className="px-1.5 py-2 text-xs text-subtle">No tracked packs yet</div>
+        ) : (
+          tracked.map((i) => {
+            const active = view.name === 'pack' && view.path === i.path
+            return (
+              <button
+                key={i.path}
+                type="button"
+                onClick={() => go({ name: 'pack', path: i.path, tab: 'mods' })}
+                className={`flex h-8.5 items-center gap-2 rounded-lg px-2 text-left transition-colors ${
+                  active
+                    ? 'bg-surface text-fg shadow-theme-xs ring-1 ring-line-strong'
+                    : 'text-fg-secondary hover:bg-hover hover:text-fg'
+                }`}
+              >
+                <InstanceIcon path={i.path} size={20} framed={false} />
+                <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{i.name}</span>
+                <span
+                  className={`shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] leading-none ${
+                    i.role === 'subscriber'
+                      ? 'bg-info-soft text-info'
+                      : active
+                        ? 'bg-accent-soft text-accent-text'
+                        : 'bg-surface-2/80 text-muted'
+                  }`}
+                >
+                  {i.role === 'subscriber' ? 'joined' : i.minecraft}
+                </span>
+              </button>
+            )
+          })
+        )}
+      </div>
+
+      <div className="flex flex-col border-t border-line bg-sidebar/80">
+        <MinecraftAccount />
+        <div className="flex items-center justify-between gap-2 border-t border-line px-3 py-2.5">
+          {settings.data?.signed_in ? (
+            <button
+              type="button"
+              onClick={() => go({ name: 'settings' })}
+              className="flex min-w-0 items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-hover"
+              title={`Signed in as ${settings.data.username}`}
+            >
+              <span className="grid size-5.5 shrink-0 place-items-center rounded-full bg-accent-soft text-[11px] font-semibold uppercase text-accent-text ring-1 ring-accent-border">
+                {(settings.data.username ?? '?').slice(0, 1)}
+              </span>
+              <span className="truncate text-xs font-medium text-fg">{settings.data.username}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => go({ name: 'settings' })}
+              className="flex min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs font-medium text-muted transition-colors hover:bg-hover hover:text-fg"
+            >
+              <UserIcon className="size-3.5" />
+              <span className="truncate">Sign in</span>
+            </button>
+          )}
+          <ThemeQuickSwitch />
+        </div>
+      </div>
     </aside>
+  )
+}
+
+const THEME_OPTIONS: readonly { mode: ThemeMode; label: string; icon: ReactNode }[] = [
+  { mode: 'system', label: 'System theme', icon: <MonitorIcon className="size-3.5" /> },
+  { mode: 'light', label: 'Light theme', icon: <SunIcon className="size-3.5" /> },
+  { mode: 'dark', label: 'Dark theme', icon: <MoonIcon className="size-3.5" /> },
+]
+
+function ThemeQuickSwitch() {
+  const mode = useTheme((s) => s.mode)
+  const setMode = useTheme((s) => s.setMode)
+  return (
+    <div
+      role="group"
+      aria-label="Appearance"
+      className="inline-flex shrink-0 items-center rounded-lg border border-line bg-bg/70 p-0.5"
+    >
+      {THEME_OPTIONS.map((o) => {
+        const active = mode === o.mode
+        return (
+          <button
+            key={o.mode}
+            type="button"
+            title={o.label}
+            aria-label={o.label}
+            aria-pressed={active}
+            onClick={() => setMode(o.mode)}
+            className={`grid size-6 place-items-center rounded-md transition-all ${
+              active
+                ? 'bg-surface text-accent-text shadow-theme-xs ring-1 ring-line-strong'
+                : 'text-muted hover:text-fg'
+            }`}
+          >
+            {o.icon}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -155,14 +268,23 @@ function StatusBar() {
   }, [notice, set])
   if (!busy && !notice) return null
   return (
-    <div className="flex h-8 shrink-0 items-center gap-3 border-t border-line px-4 text-xs">
+    <div
+      className={`flex h-9 shrink-0 items-center gap-3 border-t px-4 text-xs ${
+        !busy && notice?.kind === 'error'
+          ? 'border-bad-border bg-bad-soft text-bad'
+          : !busy && notice?.kind === 'ok'
+            ? 'border-ok-border bg-ok-soft text-ok'
+            : 'border-line bg-sidebar text-fg'
+      }`}
+    >
       {busy ? (
         <>
-          <span>{busy}</span>
+          <span className="size-2 shrink-0 rounded-full bg-accent" />
+          <span className="font-medium text-fg">{busy}</span>
           {progress && progress.total > 0 && (
             <>
               <ProgressBar done={progress.done} total={progress.total} />
-              <span className="text-muted">
+              <span className="font-mono text-[11px] text-muted tabular-nums">
                 {progress.done}/{progress.total}
               </span>
               <span className="truncate text-muted">{progress.label}</span>
@@ -171,16 +293,22 @@ function StatusBar() {
         </>
       ) : notice ? (
         <>
-          <span className={`min-w-0 flex-1 truncate ${notice.kind === 'error' ? 'text-bad' : 'text-ok'}`} title={notice.text}>
+          {notice.kind === 'error' ? <AlertIcon className="size-3.5 shrink-0" /> : <CheckIcon className="size-3.5 shrink-0" />}
+          <span className="min-w-0 flex-1 truncate font-medium" title={notice.text}>
             {notice.text}
           </span>
           {notice.open && (
-            <button type="button" className="text-muted hover:text-fg" onClick={() => void call('open_external', { target: notice.open!.path })}>
+            <Button small variant="default" onClick={() => void call('open_external', { target: notice.open!.path })}>
               {notice.open.label}
-            </button>
+            </Button>
           )}
-          <button type="button" className="text-muted hover:text-fg" onClick={() => set({ notice: null })}>
-            Dismiss
+          <button
+            type="button"
+            className="grid size-6 place-items-center rounded-md opacity-75 transition-opacity hover:bg-hover hover:opacity-100"
+            onClick={() => set({ notice: null })}
+            aria-label="Dismiss"
+          >
+            <CloseIcon className="size-3.5" />
           </button>
         </>
       ) : null}
@@ -212,7 +340,7 @@ function ConfirmDialog() {
         </>
       }
     >
-      <p className="text-muted">{confirm.body}</p>
+      <p className="leading-relaxed text-fg-secondary">{confirm.body}</p>
     </Dialog>
   )
 }
@@ -260,29 +388,37 @@ function MinecraftAccount() {
   }
 
   return (
-    <div className="flex h-10 items-center gap-2 border-t border-line px-4 text-xs text-muted">
+    <div className="flex items-center gap-2 px-3 py-2 text-xs">
       {list.length === 0 ? (
-        <button type="button" className="hover:text-fg" onClick={addOrManage} disabled={add.isPending}>
+        <button
+          type="button"
+          className="flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-line-strong bg-bg/50 px-2.5 text-xs font-medium text-muted transition-colors hover:border-accent-border hover:bg-accent-soft hover:text-accent-text disabled:opacity-40"
+          onClick={addOrManage}
+          disabled={add.isPending}
+        >
+          <UserIcon className="size-3.5" />
           Add Minecraft account
         </button>
       ) : (
-        <>
-          <span className="shrink-0">Playing as</span>
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <span className="px-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-subtle">Minecraft</span>
           <Select
+            aria-label="Minecraft account"
+            size="sm"
             value={data?.selected ?? ''}
             onChange={pick}
-            className="h-7 min-w-0 flex-1 text-xs text-fg"
+            className="w-full"
             options={[
               ...list.map((a) => ({ value: a.name, label: a.offline ? `${a.name} (offline)` : a.name })),
               ...(builtIn
                 ? [
-                    { value: ADD, label: 'Add account' },
+                    { value: ADD, label: '+ Add account' },
                     ...(data?.selected ? [{ value: REMOVE, label: `Remove ${data.selected}` }] : []),
                   ]
                 : [{ value: MANAGE, label: 'Manage accounts in Prism' }]),
             ]}
           />
-        </>
+        </div>
       )}
     </div>
   )
