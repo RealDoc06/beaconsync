@@ -162,6 +162,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
+        <ThemeQuickSwitch />
         <MinecraftAccount />
         {settings.data?.signed_in ? (
           <button
@@ -185,7 +186,6 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
             Sign in
           </button>
         )}
-        <ThemeQuickSwitch />
       </div>
     </header>
   )
