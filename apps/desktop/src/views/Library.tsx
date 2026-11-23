@@ -18,7 +18,7 @@ import { Button, Empty, ErrorLine, Input, Tag } from '../components/ui'
 import { call } from '../lib/api'
 import { LOADER_LABEL } from '../lib/format'
 import { keys, useAction, useApp } from '../lib/store'
-import type { LibraryItem, LoaderKind } from '../lib/types'
+import type { LibraryItem } from '../lib/types'
 
 type Layout = 'grid' | 'list'
 
@@ -30,15 +30,6 @@ function readLayout(): Layout {
   } catch {
     return 'grid'
   }
-}
-
-/** Soft deterministic cover band tint per mod loader so every pack card has distinct character. */
-const LOADER_BANNER: Record<LoaderKind, string> = {
-  fabric: 'from-accent/18 via-accent/6 to-transparent',
-  neoforge: 'from-bad/15 via-warn/8 to-transparent',
-  forge: 'from-info/16 via-info/5 to-transparent',
-  quilt: 'from-info/14 via-accent/8 to-transparent',
-  vanilla: 'from-ok/16 via-ok/5 to-transparent',
 }
 
 const LIST_COLS =
@@ -242,14 +233,14 @@ function usePackRowActions(item: LibraryItem) {
   return { go, open, badges, track, play }
 }
 
-/** Atmospheric featured spotlight banner for the primary tracked pack. */
+/** Featured spotlight banner for the primary tracked pack. */
 function HeroPack({ item }: { item: LibraryItem }) {
   const { go, open, badges, play } = usePackRowActions(item)
   const settings = useQuery({ queryKey: keys.settings, queryFn: () => call('get_settings') })
   const subscriber = item.role === 'subscriber'
 
   return (
-    <section className="bg-hero-glow relative overflow-hidden rounded-2xl border border-line-strong bg-surface p-5 shadow-theme-sm">
+    <section className="relative overflow-hidden rounded-2xl border border-line-strong bg-surface p-5 shadow-theme-sm">
       <div className="flex flex-wrap items-center gap-5">
         <InstanceIcon path={item.path} size={60} />
 
@@ -340,8 +331,8 @@ function PackCard({ item }: { item: LibraryItem }) {
           : 'border-line/80 bg-surface/75'
       }`}
     >
-      {/* Subtle deterministic cover ribbon */}
-      <div className={`h-12 bg-gradient-to-br ${LOADER_BANNER[item.loader.kind]} border-b border-line/60 px-4 pt-2.5`}>
+      {/* Flat solid header band */}
+      <div className="h-12 border-b border-line bg-sidebar/70 px-4 pt-2.5">
         <div className="flex items-center justify-end gap-1.5">
           <span className="rounded-md bg-bg/75 px-1.5 py-0.5 font-mono text-[10.5px] font-medium text-fg-secondary ring-1 ring-line">
             {item.minecraft}

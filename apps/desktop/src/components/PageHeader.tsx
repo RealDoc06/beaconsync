@@ -6,20 +6,14 @@ export function PageHeader({
   title,
   subtitle,
   children,
-  glow,
 }: {
   leading?: ReactNode
   title: ReactNode
   subtitle?: ReactNode
   children?: ReactNode
-  glow?: boolean
 }) {
   return (
-    <header
-      className={`@container flex min-h-[62px] shrink-0 items-center gap-2.5 border-b border-line px-6 py-3 ${
-        glow ? 'bg-masthead-glow' : ''
-      }`}
-    >
+    <header className="@container flex min-h-[62px] shrink-0 items-center gap-2.5 border-b border-line px-6 py-3">
       <div className="mr-auto flex min-w-0 flex-1 items-center gap-3.5">
         {leading}
         <div className="flex min-w-0 flex-col">

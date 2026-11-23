@@ -110,7 +110,6 @@ function Header({ p }: { p: PackInfo }) {
   })
   return (
     <PageHeader
-      glow
       leading={<InstanceIcon path={p.path} size={42} />}
       title={
         <>
