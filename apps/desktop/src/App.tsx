@@ -1,7 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listen } from '@tauri-apps/api/event'
 import { useEffect, type ReactNode } from 'react'
-import logo from './assets/logo.svg'
 import { Conflicts } from './components/Conflicts'
 import {
   AlertIcon,
@@ -108,24 +107,21 @@ function Sidebar() {
   }
 
   return (
-    <aside className="flex w-56 shrink-0 flex-col border-r border-line bg-sidebar">
-      {isMac && <div data-tauri-drag-region className="h-7 shrink-0" />}
-      <div data-tauri-drag-region className="flex h-13 shrink-0 items-center gap-2.5 px-3.5">
-        <div className="relative grid size-7 shrink-0 place-items-center rounded-lg ring-1 ring-accent-border/70">
-          <img src={logo} alt="" className="size-7 rounded-[7px]" />
-        </div>
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate text-[13.5px] font-semibold leading-tight tracking-tight text-fg">BeaconSync</span>
-          {version && (
-            <span className="truncate font-mono text-[10.5px] leading-tight text-subtle" title={version}>
-              v{version.replace(/^v/, '')}
-            </span>
-          )}
-        </div>
+    <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-sidebar">
+      <div
+        data-tauri-drag-region
+        className={`flex shrink-0 items-center gap-1.5 ${isMac ? 'h-9 pl-[76px] pr-3' : 'h-11 px-3.5'}`}
+      >
+        <span className="shrink-0 text-[13px] font-semibold leading-none tracking-tight text-fg">BeaconSync</span>
+        {version && (
+          <span className="min-w-0 truncate font-mono text-[10.5px] leading-none text-subtle" title={version}>
+            v{version.replace(/^v/, '')}
+          </span>
+        )}
         <UpdateButton />
       </div>
 
-      <nav className="flex flex-col gap-0.5 px-2.5 pt-1">
+      <nav className="flex flex-col gap-0.5 px-2.5 pt-1.5">
         {nav('library', 'Library', <LibraryIcon className="size-4" />)}
         {nav('join', 'Join with code', <LinkCodeIcon className="size-4" />)}
         {nav('settings', 'Settings', <SettingsIcon className="size-4" />)}
@@ -235,7 +231,7 @@ function ThemeQuickSwitch() {
             aria-label={o.label}
             aria-pressed={active}
             onClick={() => setMode(o.mode)}
-            className={`grid size-6 place-items-center rounded-md transition-all ${
+            className={`inline-flex size-6 items-center justify-center rounded-md p-0 leading-none transition-all ${
               active
                 ? 'bg-surface text-accent-text shadow-theme-xs ring-1 ring-line-strong'
                 : 'text-muted hover:text-fg'

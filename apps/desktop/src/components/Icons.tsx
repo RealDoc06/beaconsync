@@ -297,7 +297,7 @@ export function SunIcon(props: Props) {
 export function MoonIcon(props: Props) {
   return (
     <Svg {...props}>
-      <path d="M12.8 9.6A5.2 5.2 0 0 1 6.4 3.2a5.2 5.2 0 1 0 6.4 6.4Z" />
+      <path d="M13.2 9.8A5.4 5.4 0 0 1 6.2 2.8a5.4 5.4 0 1 0 7 7Z" />
     </Svg>
   )
 }
