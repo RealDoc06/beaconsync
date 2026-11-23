@@ -22,6 +22,7 @@ import {
 import { InstanceIcon } from './components/InstanceIcon'
 import { Button, Dialog, ProgressBar, Select } from './components/ui'
 import { UpdateButton, useUpdate } from './components/UpdateButton'
+import { WindowControls } from './components/WindowControls'
 import { call } from './lib/api'
 import { askConfirm, keys, useAction, useApp, type View } from './lib/store'
 import { useTheme, type ThemeMode } from './lib/theme'
@@ -102,7 +103,8 @@ function Page({ view }: { view: View }) {
   }
 }
 
-/** Unified macOS-aligned top chrome: brand + version left, quick command bar center, accounts & theme right. */
+/** Unified top chrome doubling as the title bar: brand + version left, quick command bar center,
+ * accounts & theme right, then caption buttons on Windows. */
 function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const view = useApp((s) => s.view)
   const go = useApp((s) => s.go)
@@ -125,7 +127,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   return (
     <header
       data-tauri-drag-region
-      className={`flex shrink-0 items-center gap-3 pr-3 ${isMac ? 'h-9.5 pl-[76px]' : 'h-10 pl-3.5'}`}
+      className={`flex shrink-0 items-center gap-3 ${isMac ? 'h-9.5 pl-[76px]' : 'h-10 pl-3.5'} ${isWindows ? '' : 'pr-3'}`}
     >
       <div data-tauri-drag-region className="flex shrink-0 items-center gap-1.5">
         <button
@@ -187,6 +189,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
           </button>
         )}
       </div>
+      {isWindows && <WindowControls />}
     </header>
   )
 }
@@ -437,9 +440,10 @@ function ConfirmDialog() {
   )
 }
 
-/** macOS draws the traffic lights over the app (`titleBarStyle: Overlay`); other platforms keep
- * their native title bar. */
+/** macOS draws the traffic lights over the app (`titleBarStyle: Overlay`); Windows runs
+ * undecorated with our own caption buttons; Linux keeps its native title bar. */
 const isMac = navigator.userAgent.includes('Mac')
+const isWindows = navigator.userAgent.includes('Windows')
 
 // Colons can't appear in Minecraft names, so these never collide with an account.
 const ADD = ':add'
