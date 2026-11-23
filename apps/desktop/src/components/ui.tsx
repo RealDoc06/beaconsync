@@ -201,8 +201,8 @@ export function Toggle({
         }`}
       >
         <span
-          className={`absolute top-1/2 size-3 -translate-y-1/2 rounded-full transition-transform duration-150 ${
-            checked ? 'translate-x-[15px] bg-accent-fg' : 'translate-x-[2px] bg-muted'
+          className={`absolute top-1/2 left-0 size-3 -translate-y-1/2 rounded-full transition-transform duration-150 ${
+            checked ? 'translate-x-[16px] bg-accent-fg' : 'translate-x-[2px] bg-muted'
           }`}
         />
       </span>
