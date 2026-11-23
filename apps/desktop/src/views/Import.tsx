@@ -28,19 +28,17 @@ export function ImportView() {
   return (
     <>
       <PageHeader title="Import" subtitle="Bring in an existing pack from disk, Modrinth, or CurseForge" />
-      <div className="pt-1">
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            { value: 'file', label: 'From file or folder', icon: <FolderIcon className="size-3.5" /> },
-            { value: 'modrinth', label: 'Modrinth modpacks', icon: <DownloadIcon className="size-3.5" /> },
-            ...(hasCf
-              ? [{ value: 'curseforge' as const, label: 'CurseForge modpacks', icon: <DownloadIcon className="size-3.5" /> }]
-              : []),
-          ]}
-        />
-      </div>
+      <Tabs
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { value: 'file', label: 'From file or folder', icon: <FolderIcon className="size-3.5" /> },
+          { value: 'modrinth', label: 'Modrinth modpacks', icon: <DownloadIcon className="size-3.5" /> },
+          ...(hasCf
+            ? [{ value: 'curseforge' as const, label: 'CurseForge modpacks', icon: <DownloadIcon className="size-3.5" /> }]
+            : []),
+        ]}
+      />
       <div className="min-h-0 flex-1 overflow-auto">
         {tab === 'file' && <FromDisk />}
         {tab === 'modrinth' && <Modrinth />}

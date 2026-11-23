@@ -1,38 +1,38 @@
 @import 'tailwindcss';
 
 /* ============================================================================
-   BeaconSync Design System: Dark and Light semantic tokens.
-   All components reference semantic tokens so dark and light themes stay
-   consistent, legible (WCAG AA+), and free of hardcoded hex colors.
+   BeaconSync 2.0 Design System: Floating Inset Workspace (Dark & Light).
+   Semantic tokens guarantee WCAG AA+ contrast across all surfaces and controls.
    ============================================================================ */
 
 :root,
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --c-bg: #0c0d10;
-  --c-sidebar: #111318;
-  --c-surface: #151820;
-  --c-surface-2: #1c202b;
-  --c-input: #0e1015;
-  --c-console: #090a0d;
-  --c-hover: rgba(255, 255, 255, 0.048);
-  --c-active: rgba(245, 179, 66, 0.12);
-  --c-overlay: rgba(5, 6, 9, 0.76);
+  --c-shell: #08090c;
+  --c-bg: #0f1117;
+  --c-sidebar: #0b0d12;
+  --c-surface: #151822;
+  --c-surface-2: #1c212e;
+  --c-input: #0c0e14;
+  --c-console: #090a0e;
+  --c-hover: rgba(255, 255, 255, 0.05);
+  --c-active: rgba(245, 179, 66, 0.13);
+  --c-overlay: rgba(4, 5, 8, 0.78);
 
   --c-fg: #f3f5f8;
-  --c-fg-secondary: #c5ccd9;
-  --c-muted: #98a1b3;
-  --c-subtle: #828b9d;
+  --c-fg-secondary: #c7cedb;
+  --c-muted: #99a2b5;
+  --c-subtle: #858fa3;
 
   --c-line: rgba(255, 255, 255, 0.08);
   --c-line-strong: rgba(255, 255, 255, 0.15);
-  --c-line-hover: rgba(255, 255, 255, 0.24);
+  --c-line-hover: rgba(255, 255, 255, 0.25);
 
   --c-accent: #f5b342;
-  --c-accent-hover: #ffc35c;
-  --c-accent-text: #f7c261;
-  --c-accent-fg: #151004;
+  --c-accent-hover: #ffc55e;
+  --c-accent-text: #f8c66b;
+  --c-accent-fg: #140f04;
   --c-accent-soft: rgba(245, 179, 66, 0.13);
   --c-accent-border: rgba(245, 179, 66, 0.30);
 
@@ -56,36 +56,41 @@
   --c-scroll: rgba(255, 255, 255, 0.16);
   --c-scroll-hover: rgba(255, 255, 255, 0.28);
 
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2398a1b3' fill='none' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --hero-glow: radial-gradient(ellipse 68% 120% at 8% 0%, rgba(245, 179, 66, 0.14), rgba(94, 194, 242, 0.05) 55%, transparent 82%);
+  --masthead-glow: radial-gradient(ellipse 55% 130% at 0% 0%, rgba(245, 179, 66, 0.11), transparent 72%);
 
-  --sh-xs: 0 1px 2px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --sh-sm: 0 2px 8px -2px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --sh-md: 0 12px 32px -6px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.06);
-  --sh-lg: 0 24px 64px -12px rgba(0, 0, 0, 0.78), 0 0 0 1px rgba(255, 255, 255, 0.08);
-  --sh-accent: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 14px -3px rgba(245, 179, 66, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%2399a2b5' fill='none' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+  --sh-xs: 0 1px 2px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --sh-sm: 0 4px 14px -3px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --sh-md: 0 14px 36px -8px rgba(0, 0, 0, 0.68), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --sh-lg: 0 28px 68px -12px rgba(0, 0, 0, 0.82), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --sh-canvas: 0 2px 16px -4px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --sh-accent: 0 1px 2px rgba(0, 0, 0, 0.36), 0 5px 16px -4px rgba(245, 179, 66, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.30);
 }
 
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --c-bg: #f8f7f4;
-  --c-sidebar: #f0eee8;
+  --c-shell: #ebe8e0;
+  --c-bg: #faf9f6;
+  --c-sidebar: #f2f0ea;
   --c-surface: #ffffff;
-  --c-surface-2: #eae7df;
+  --c-surface-2: #eeebe3;
   --c-input: #ffffff;
-  --c-console: #f2f1ec;
+  --c-console: #f3f1ec;
   --c-hover: rgba(20, 22, 28, 0.048);
   --c-active: rgba(158, 90, 4, 0.11);
   --c-overlay: rgba(17, 19, 24, 0.48);
 
-  --c-fg: #15171c;
-  --c-fg-secondary: #343a47;
-  --c-muted: #505868;
-  --c-subtle: #5e6675;
+  --c-fg: #14161b;
+  --c-fg-secondary: #333946;
+  --c-muted: #4e5666;
+  --c-subtle: #5d6575;
 
-  --c-line: rgba(21, 23, 28, 0.09);
-  --c-line-strong: rgba(21, 23, 28, 0.16);
-  --c-line-hover: rgba(21, 23, 28, 0.28);
+  --c-line: rgba(20, 22, 27, 0.09);
+  --c-line-strong: rgba(20, 22, 27, 0.16);
+  --c-line-hover: rgba(20, 22, 27, 0.28);
 
   --c-accent: #9e5a04;
   --c-accent-hover: #834902;
@@ -111,19 +116,24 @@
   --c-bad-border: rgba(185, 28, 28, 0.24);
 
   --c-ring: rgba(158, 90, 4, 0.85);
-  --c-scroll: rgba(21, 23, 28, 0.18);
-  --c-scroll-hover: rgba(21, 23, 28, 0.32);
+  --c-scroll: rgba(20, 22, 27, 0.18);
+  --c-scroll-hover: rgba(20, 22, 27, 0.32);
 
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%23505868' fill='none' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --hero-glow: radial-gradient(ellipse 68% 120% at 8% 0%, rgba(186, 114, 8, 0.11), rgba(7, 89, 133, 0.04) 55%, transparent 82%);
+  --masthead-glow: radial-gradient(ellipse 55% 130% at 0% 0%, rgba(186, 114, 8, 0.09), transparent 72%);
 
-  --sh-xs: 0 1px 2px rgba(21, 23, 28, 0.05);
-  --sh-sm: 0 2px 6px -1px rgba(21, 23, 28, 0.08), 0 1px 2px rgba(21, 23, 28, 0.04);
-  --sh-md: 0 12px 30px -6px rgba(21, 23, 28, 0.15), 0 2px 6px -2px rgba(21, 23, 28, 0.06);
-  --sh-lg: 0 24px 60px -12px rgba(21, 23, 28, 0.24), 0 0 0 1px rgba(21, 23, 28, 0.06);
-  --sh-accent: 0 1px 2px rgba(131, 73, 2, 0.24), 0 4px 12px -3px rgba(158, 90, 4, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%234e5666' fill='none' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+  --sh-xs: 0 1px 2px rgba(20, 22, 27, 0.05);
+  --sh-sm: 0 4px 12px -2px rgba(20, 22, 27, 0.08), 0 1px 3px rgba(20, 22, 27, 0.04);
+  --sh-md: 0 14px 32px -6px rgba(20, 22, 27, 0.15), 0 2px 6px -2px rgba(20, 22, 27, 0.06);
+  --sh-lg: 0 24px 60px -12px rgba(20, 22, 27, 0.24), 0 0 0 1px rgba(20, 22, 27, 0.06);
+  --sh-canvas: 0 2px 12px -3px rgba(20, 22, 27, 0.08), 0 0 0 1px rgba(20, 22, 27, 0.06);
+  --sh-accent: 0 1px 2px rgba(131, 73, 2, 0.24), 0 5px 14px -4px rgba(158, 90, 4, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.20);
 }
 
 @theme inline {
+  --color-shell: var(--c-shell);
   --color-bg: var(--c-bg);
   --color-sidebar: var(--c-sidebar);
   --color-surface: var(--c-surface);
@@ -172,6 +182,7 @@
   --shadow-theme-sm: var(--sh-sm);
   --shadow-theme-md: var(--sh-md);
   --shadow-theme-lg: var(--sh-lg);
+  --shadow-theme-canvas: var(--sh-canvas);
   --shadow-theme-accent: var(--sh-accent);
 
   --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
@@ -186,7 +197,7 @@ body,
 
 body {
   margin: 0;
-  background: var(--c-bg);
+  background: var(--c-shell);
   color: var(--c-fg);
   font-family: var(--font-sans);
   font-size: 13px;
@@ -264,6 +275,15 @@ select {
 option {
   background: var(--c-surface);
   color: var(--c-fg);
+}
+
+/* Ambient stage gradients */
+.bg-hero-glow {
+  background-image: var(--hero-glow);
+}
+
+.bg-masthead-glow {
+  background-image: var(--masthead-glow);
 }
 
 /* Subtle dialog & popover entrance */

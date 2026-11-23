@@ -66,7 +66,7 @@ function AppearanceSection() {
   const mode = useTheme((s) => s.mode)
   const setMode = useTheme((s) => s.setMode)
 
-  // Preview swatches mirror the light/dark tokens in `src/index.css`.
+  // Preview swatches mirror the inset shell/canvas light & dark tokens in `src/index.css`.
   const cards: { mode: ThemeMode; label: string; hint: string; icon: ReactNode; preview: ReactNode }[] = [
     {
       mode: 'system',
@@ -76,24 +76,24 @@ function AppearanceSection() {
       preview: (
         <div className="relative h-14 w-full overflow-hidden rounded-lg border border-line">
           <div className="absolute inset-0 flex">
-            <div className="flex w-1/2 bg-[#f8f7f4]">
-              <div className="w-1/3 border-r border-black/10 bg-[#f0eee8] p-1.5">
+            <div className="flex w-1/2 bg-[#ebe8e0] p-1">
+              <div className="w-1/3 p-1">
                 <div className="h-1.5 w-full rounded bg-[#9e5a04]/70" />
                 <div className="mt-1 h-1 w-3/4 rounded bg-black/15" />
               </div>
-              <div className="flex-1 p-2">
-                <div className="h-2 w-2/3 rounded bg-black/15" />
-                <div className="mt-1.5 h-5 rounded border border-black/10 bg-white" />
+              <div className="flex-1 rounded-md border border-black/10 bg-[#faf9f6] p-1.5">
+                <div className="h-1.5 w-2/3 rounded bg-black/15" />
+                <div className="mt-1 h-4 rounded border border-black/10 bg-white" />
               </div>
             </div>
-            <div className="flex w-1/2 bg-[#0c0d10]">
-              <div className="w-1/3 border-r border-white/10 bg-[#111318] p-1.5">
-                <div className="h-1.5 w-full rounded bg-[#f5b342]/70" />
+            <div className="flex w-1/2 bg-[#08090c] p-1">
+              <div className="w-1/3 p-1">
+                <div className="h-1.5 w-full rounded bg-[#f5b342]/75" />
                 <div className="mt-1 h-1 w-3/4 rounded bg-white/15" />
               </div>
-              <div className="flex-1 p-2">
-                <div className="h-2 w-2/3 rounded bg-white/15" />
-                <div className="mt-1.5 h-5 rounded border border-white/10 bg-[#151820]" />
+              <div className="flex-1 rounded-md border border-white/10 bg-[#0f1117] p-1.5">
+                <div className="h-1.5 w-2/3 rounded bg-white/15" />
+                <div className="mt-1 h-4 rounded border border-white/10 bg-[#151822]" />
               </div>
             </div>
           </div>
@@ -103,21 +103,21 @@ function AppearanceSection() {
     {
       mode: 'light',
       label: 'Light',
-      hint: 'Bright surfaces',
+      hint: 'Warm Quartz studio',
       icon: <SunIcon className="size-3.5" />,
       preview: (
-        <div className="flex h-14 w-full overflow-hidden rounded-lg border border-black/10 bg-[#f8f7f4]">
-          <div className="w-1/4 border-r border-black/10 bg-[#f0eee8] p-1.5">
+        <div className="flex h-14 w-full overflow-hidden rounded-lg border border-black/10 bg-[#ebe8e0] p-1">
+          <div className="w-1/4 p-1">
             <div className="h-1.5 w-full rounded bg-[#9e5a04]/80" />
             <div className="mt-1.5 h-1 w-4/5 rounded bg-black/15" />
             <div className="mt-1 h-1 w-3/5 rounded bg-black/10" />
           </div>
-          <div className="flex flex-1 flex-col gap-1.5 p-2">
+          <div className="flex flex-1 flex-col gap-1.5 rounded-md border border-black/10 bg-[#faf9f6] p-1.5">
             <div className="flex items-center justify-between">
               <div className="h-1.5 w-10 rounded bg-black/20" />
               <div className="h-2.5 w-6 rounded bg-[#9e5a04]" />
             </div>
-            <div className="grid flex-1 grid-cols-2 gap-1.5">
+            <div className="grid flex-1 grid-cols-2 gap-1">
               <div className="rounded border border-black/10 bg-white" />
               <div className="rounded border border-black/10 bg-white" />
             </div>
@@ -128,23 +128,23 @@ function AppearanceSection() {
     {
       mode: 'dark',
       label: 'Dark',
-      hint: 'Low-light surfaces',
+      hint: 'Obsidian studio',
       icon: <MoonIcon className="size-3.5" />,
       preview: (
-        <div className="flex h-14 w-full overflow-hidden rounded-lg border border-white/10 bg-[#0c0d10]">
-          <div className="w-1/4 border-r border-white/10 bg-[#111318] p-1.5">
+        <div className="flex h-14 w-full overflow-hidden rounded-lg border border-white/10 bg-[#08090c] p-1">
+          <div className="w-1/4 p-1">
             <div className="h-1.5 w-full rounded bg-[#f5b342]/80" />
             <div className="mt-1.5 h-1 w-4/5 rounded bg-white/15" />
             <div className="mt-1 h-1 w-3/5 rounded bg-white/10" />
           </div>
-          <div className="flex flex-1 flex-col gap-1.5 p-2">
+          <div className="flex flex-1 flex-col gap-1.5 rounded-md border border-white/10 bg-[#0f1117] p-1.5">
             <div className="flex items-center justify-between">
               <div className="h-1.5 w-10 rounded bg-white/20" />
               <div className="h-2.5 w-6 rounded bg-[#f5b342]" />
             </div>
-            <div className="grid flex-1 grid-cols-2 gap-1.5">
-              <div className="rounded border border-white/10 bg-[#151820]" />
-              <div className="rounded border border-white/10 bg-[#151820]" />
+            <div className="grid flex-1 grid-cols-2 gap-1">
+              <div className="rounded border border-white/10 bg-[#151822]" />
+              <div className="rounded border border-white/10 bg-[#151822]" />
             </div>
           </div>
         </div>

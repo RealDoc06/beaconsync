@@ -57,6 +57,9 @@ export function ChangesTab({ path }: { path: string }) {
   const d = s.diff
   const empty = d.files.length === 0 && !d.minecraft && !d.loader
   const totalChanges = d.files.length + (d.minecraft ? 1 : 0) + (d.loader ? 1 : 0)
+  const addedCount = d.files.filter((c) => c.kind === 'added' || c.kind === 'enabled').length
+  const changedCount = d.files.filter((c) => c.kind === 'modified').length + (d.minecraft ? 1 : 0) + (d.loader ? 1 : 0)
+  const removedCount = d.files.filter((c) => c.kind === 'removed' || c.kind === 'disabled').length
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -132,11 +135,11 @@ export function ChangesTab({ path }: { path: string }) {
         )}
       </div>
 
-      <aside className="flex w-64 lg:w-76 shrink-0 flex-col gap-3.5 border-l border-line bg-sidebar p-5">
+      <aside className="flex w-64 lg:w-76 shrink-0 flex-col gap-3.5 border-l border-line bg-sidebar/60 p-5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-xs font-semibold text-fg">
             <DiffIcon className="size-3.5 text-accent-text" />
-            Save snapshot
+            Snapshot composer
           </div>
           {totalChanges > 0 && (
             <Tag tone="warn" dot>
@@ -144,6 +147,14 @@ export function ChangesTab({ path }: { path: string }) {
             </Tag>
           )}
         </div>
+
+        {totalChanges > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {addedCount > 0 && <Tag tone="ok">+{addedCount} added</Tag>}
+            {changedCount > 0 && <Tag tone="warn">~{changedCount} changed</Tag>}
+            {removedCount > 0 && <Tag tone="bad">-{removedCount} removed</Tag>}
+          </div>
+        )}
 
         <Textarea
           value={message}

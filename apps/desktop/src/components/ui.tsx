@@ -211,15 +211,17 @@ export function Toggle({
   )
 }
 
-/** Refined horizontal tab strip with roving tabindex and arrow-key navigation. */
+/** Studio pill navigation bar with roving tabindex and arrow-key navigation. */
 export function Tabs<V extends string>({
   value,
   onChange,
   tabs,
+  variant = 'pill',
 }: {
   value: V
   onChange: (v: V) => void
   tabs: readonly { value: V; label: ReactNode; icon?: ReactNode }[]
+  variant?: 'pill' | 'underline'
 }) {
   const listRef = useRef<HTMLDivElement>(null)
   const onKeyDown = (e: React.KeyboardEvent, idx: number) => {
@@ -236,29 +238,60 @@ export function Tabs<V extends string>({
     listRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
   }
 
+  if (variant === 'underline') {
+    return (
+      <div ref={listRef} role="tablist" className="flex items-center gap-1 border-b border-line px-6">
+        {tabs.map((t, idx) => {
+          const active = value === t.value
+          return (
+            <button
+              key={t.value}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              onClick={() => onChange(t.value)}
+              onKeyDown={(e) => onKeyDown(e, idx)}
+              className={`relative -mb-px flex h-10 items-center gap-2 px-3 text-[13px] font-medium transition-colors ${
+                active ? 'text-fg' : 'text-muted hover:text-fg-secondary'
+              }`}
+            >
+              {t.icon && <span className={active ? 'text-accent-text' : 'text-muted'}>{t.icon}</span>}
+              {t.label}
+              {active && <span className="absolute right-2 bottom-0 left-2 h-[2px] rounded-full bg-accent" />}
+            </button>
+          )
+        })}
+      </div>
+    )
+  }
+
   return (
-    <div ref={listRef} role="tablist" className="flex items-center gap-1 border-b border-line px-6">
-      {tabs.map((t, idx) => {
-        const active = value === t.value
-        return (
-          <button
-            key={t.value}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            tabIndex={active ? 0 : -1}
-            onClick={() => onChange(t.value)}
-            onKeyDown={(e) => onKeyDown(e, idx)}
-            className={`relative -mb-px flex h-10 items-center gap-2 px-3 text-[13px] font-medium transition-colors ${
-              active ? 'text-fg' : 'text-muted hover:text-fg-secondary'
-            }`}
-          >
-            {t.icon && <span className={active ? 'text-accent-text' : 'text-muted'}>{t.icon}</span>}
-            {t.label}
-            {active && <span className="absolute right-2 bottom-0 left-2 h-[2px] rounded-full bg-accent" />}
-          </button>
-        )
-      })}
+    <div className="flex items-center border-b border-line px-6 py-2.5">
+      <div ref={listRef} role="tablist" className="inline-flex items-center gap-1 rounded-xl border border-line bg-sidebar p-1">
+        {tabs.map((t, idx) => {
+          const active = value === t.value
+          return (
+            <button
+              key={t.value}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              onClick={() => onChange(t.value)}
+              onKeyDown={(e) => onKeyDown(e, idx)}
+              className={`inline-flex h-7.5 items-center gap-1.5 rounded-lg px-3 text-[12.5px] font-medium transition-all ${
+                active
+                  ? 'bg-surface text-fg shadow-theme-xs ring-1 ring-line-strong'
+                  : 'text-muted hover:text-fg'
+              }`}
+            >
+              {t.icon && <span className={active ? 'text-accent-text' : 'text-muted'}>{t.icon}</span>}
+              {t.label}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }

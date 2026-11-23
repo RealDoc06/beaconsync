@@ -118,7 +118,7 @@ export function ServersTab({ p }: { p: PackInfo }) {
         </Button>
       </div>
 
-      <div className="flex flex-1 flex-col gap-5 p-6">
+      <div className="@container flex flex-1 flex-col gap-5 p-6">
         {!published && (
           <div className="rounded-2xl border border-line bg-surface shadow-theme-xs">
             <Empty
@@ -148,7 +148,7 @@ export function ServersTab({ p }: { p: PackInfo }) {
         )}
 
         {servers.data && servers.data.length > 0 && (
-          <div className="@container overflow-hidden rounded-2xl border border-line bg-surface shadow-theme-xs divide-y divide-line">
+          <div className="grid grid-cols-1 gap-3.5 @[740px]:grid-cols-2">
             {servers.data.map((s) => (
               <ServerRow
                 key={s.id}
@@ -239,42 +239,43 @@ function ServerRow({
       type="button"
       onClick={onOpen}
       title="Open console and backups"
-      className="group grid w-full grid-cols-[minmax(140px,1.2fr)_minmax(120px,1fr)_auto_minmax(0,1fr)_auto] @max-[760px]:grid-cols-[minmax(140px,1.2fr)_minmax(110px,1fr)_auto_auto] items-center gap-3 px-4 py-3.5 text-left transition-colors hover:bg-hover"
+      className="group flex w-full flex-col gap-3 rounded-2xl border border-line bg-surface p-4 text-left shadow-theme-xs transition-all duration-150 hover:-translate-y-0.5 hover:border-accent-border hover:shadow-theme-sm"
     >
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className={`size-2 shrink-0 rounded-full ${s.online ? 'bg-ok' : 'bg-subtle'}`} />
-          <span className="truncate font-semibold text-fg group-hover:text-accent-text">{s.name}</span>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={`size-2 shrink-0 rounded-full ${s.online ? 'bg-ok' : 'bg-subtle'}`} />
+            <span className="truncate text-[14px] font-semibold text-fg group-hover:text-accent-text">{s.name}</span>
+          </div>
+          <div className="mt-0.5 truncate pl-4 font-mono text-[11px] text-muted">{s.address}</div>
         </div>
-        <div className="mt-0.5 truncate pl-4 font-mono text-[11px] text-muted">{s.address}</div>
-      </div>
-
-      <div className="min-w-0">
-        <div className="truncate text-[13px] font-medium text-fg">
-          {version}
-          {pending && <span className="text-warn"> → {target}</span>}
-        </div>
-        <div className="mt-0.5 truncate font-mono text-[11px] text-muted">
-          beacon {s.agent_version ?? 'unknown'}
-          {latest && <span className="text-warn"> → {latest}</span>}
-        </div>
-      </div>
-
-      <div>
         <Tag tone={tone} dot>
           {s.online ? s.status : 'offline'}
           {s.last_seen && !s.online && ` · ${ago(s.last_seen)}`}
         </Tag>
       </div>
 
-      <span className="truncate text-xs text-muted @max-[760px]:hidden" title={s.message}>
-        {s.message}
-      </span>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-xl border border-line bg-bg/70 px-3 py-2 text-xs">
+        <span className="min-w-0 max-w-full truncate font-medium text-fg" title={pending ? `${version} → ${target}` : version}>
+          {version}
+          {pending && <span className="text-warn"> → {target}</span>}
+        </span>
+        <span className="text-subtle">·</span>
+        <span className="min-w-0 max-w-full truncate font-mono text-[11px] text-muted">
+          beacon {s.agent_version ?? 'unknown'}
+          {latest && <span className="text-warn"> → {latest}</span>}
+        </span>
+      </div>
 
-      <span className="inline-flex items-center gap-1 text-xs font-medium text-muted transition-colors group-hover:text-fg">
-        Manage
-        <ChevronRightIcon className="size-3.5" />
-      </span>
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="min-w-0 flex-1 truncate text-muted" title={s.message}>
+          {s.message || 'Ready for deploys'}
+        </span>
+        <span className="inline-flex shrink-0 items-center gap-1 font-medium text-accent-text">
+          Console &amp; backups
+          <ChevronRightIcon className="size-3.5" />
+        </span>
+      </div>
     </button>
   )
 }

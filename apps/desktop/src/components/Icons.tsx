@@ -401,3 +401,11 @@ export function RocketIcon(props: Props) {
     </Svg>
   )
 }
+
+export function CommandIcon(props: Props) {
+  return (
+    <Svg {...props}>
+      <path d="M5.5 5.5H4a1.5 1.5 0 1 1 1.5-1.5v8A1.5 1.5 0 1 1 4 10.5h8a1.5 1.5 0 1 1-1.5 1.5V4A1.5 1.5 0 1 1 12 5.5H5.5Z" />
+    </Svg>
+  )
+}

@@ -85,9 +85,7 @@ export function PackView({ path, tab }: { path: string; tab: PackTab }) {
     <>
       <Header p={p} />
       {subscriber && <SubscribedBanner path={path} />}
-      <div className="bg-bg pt-1">
-        <Tabs value={active} onChange={(t) => go({ name: 'pack', path, tab: t })} tabs={tabs} />
-      </div>
+      <Tabs value={active} onChange={(t) => go({ name: 'pack', path, tab: t })} tabs={tabs} />
       <div className="flex min-h-0 flex-1 flex-col">
         {active === 'mods' && <ModsTab p={p} />}
         {active === 'changes' && <ChangesTab path={path} />}
@@ -112,7 +110,8 @@ function Header({ p }: { p: PackInfo }) {
   })
   return (
     <PageHeader
-      leading={<InstanceIcon path={p.path} size={34} />}
+      glow
+      leading={<InstanceIcon path={p.path} size={42} />}
       title={
         <>
           <span className="truncate">{p.name}</span>
@@ -133,37 +132,38 @@ function Header({ p }: { p: PackInfo }) {
       }
       subtitle={
         <span>
-          Minecraft <span className="font-mono text-fg-secondary">{p.minecraft}</span> · {loaderText(p.loader)}
+          Minecraft <span className="font-mono font-medium text-fg-secondary">{p.minecraft}</span> · {loaderText(p.loader)}
         </span>
       }
     >
-      <Button variant="ghost" small onClick={() => setRenaming(true)} title="Rename pack" aria-label="Rename pack">
-        <PencilIcon className="size-3.5" />
-        <span className="@max-[780px]:hidden">Rename</span>
-      </Button>
-      <Button
-        variant="ghost-danger"
-        small
-        title="Delete pack"
-        aria-label="Delete pack"
-        onClick={() =>
-          askConfirm({
-            title: `Delete ${p.name}?`,
-            body: 'This removes the instance folder, its worlds and its saved versions from this computer. Published copies on the hub stay.',
-            action: 'Delete',
-            danger: true,
-            onConfirm: () => remove.mutate(undefined),
-          })
-        }
-      >
-        <TrashIcon className="size-3.5" />
-        <span className="@max-[780px]:hidden">Delete</span>
-      </Button>
-      <Button small onClick={() => reveal.mutate(undefined)} title="Open folder" aria-label="Open folder">
-        <FolderIcon className="size-3.5" />
-        <span className="@max-[720px]:hidden">Folder</span>
-      </Button>
+      <div className="flex items-center gap-1 rounded-xl border border-line bg-surface/80 p-1">
+        <Button size="icon" variant="ghost" onClick={() => reveal.mutate(undefined)} title="Open pack folder" aria-label="Open pack folder">
+          <FolderIcon className="size-3.5" />
+        </Button>
+        <Button size="icon" variant="ghost" onClick={() => setRenaming(true)} title="Rename pack" aria-label="Rename pack">
+          <PencilIcon className="size-3.5" />
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost-danger"
+          title="Delete pack"
+          aria-label="Delete pack"
+          onClick={() =>
+            askConfirm({
+              title: `Delete ${p.name}?`,
+              body: 'This removes the instance folder, its worlds and its saved versions from this computer. Published copies on the hub stay.',
+              action: 'Delete',
+              danger: true,
+              onConfirm: () => remove.mutate(undefined),
+            })
+          }
+        >
+          <TrashIcon className="size-3.5" />
+        </Button>
+      </div>
+
       <Memory path={p.path} />
+
       <Button variant="primary" onClick={() => play.mutate(undefined)} disabled={play.isPending}>
         <PlayIcon className="size-3.5" />
         Play
@@ -190,11 +190,11 @@ function Memory({ path }: { path: string }) {
       value={memory.data ? String(memory.data) : ''}
       onChange={(v) => save.mutate(v ? Number(v) : null)}
       options={[
-        { value: '', label: 'Memory: default' },
-        ...MEMORY_GB.map((gb) => ({ value: String(gb * 1024), label: `Memory: ${gb} GB` })),
+        { value: '', label: 'RAM: default' },
+        ...MEMORY_GB.map((gb) => ({ value: String(gb * 1024), label: `RAM: ${gb} GB` })),
         // Keep a value set elsewhere (in Prism) selectable.
         ...(memory.data && !MEMORY_GB.includes(memory.data / 1024)
-          ? [{ value: String(memory.data), label: `Memory: ${memory.data} MB` }]
+          ? [{ value: String(memory.data), label: `RAM: ${memory.data} MB` }]
           : []),
       ]}
     />

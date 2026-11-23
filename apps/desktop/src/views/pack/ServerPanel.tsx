@@ -175,6 +175,7 @@ export function ServerPanel({
       </div>
 
       <Tabs
+        variant="underline"
         value={tab}
         onChange={setTab}
         tabs={[

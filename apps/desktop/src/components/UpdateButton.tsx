@@ -56,7 +56,7 @@ export function UpdateButton() {
 
   return (
     <div
-      className="relative ml-auto"
+      className="relative"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}
